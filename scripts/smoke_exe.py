@@ -4,7 +4,7 @@
 
 Что проверяется на настоящей Windows:
   1. Kadr.exe запускается и не падает;
-  2. `Kadr.exe --full` (вторая копия передаёт команду первой) → PNG в папке сохранения;
+  2. `Kadr.exe --full` (вторая копия передаёт команду первой) → WEBP в папке сохранения;
   3. запись повтора стартует (FFmpeg пишет сегменты), `--save-replay` → корректный MP4;
   4. после принудительного завершения Kadr (как «Снять задачу») не остаётся FFmpeg.
 Настройки и файлы — во временной папке, чтобы не зависеть от окружения.
@@ -47,7 +47,8 @@ def main() -> None:
     appdata, shots = work / "appdata", work / "shots"
     (appdata / "Kadr").mkdir(parents=True)
     (appdata / "Kadr" / "settings.json").write_text(json.dumps({
-        "save_dir": str(shots), "notify_on_save": False,
+        # WEBP — самый «хрупкий» формат: проверяем, что плагин Qt на месте после очистки сборки
+        "save_dir": str(shots), "notify_on_save": False, "image_format": "webp", "check_updates": False,
         "replay_enabled": True, "replay_minutes": 1, "replay_fps": 15, "replay_height": 720,
         "replay_system_audio": True,   # на сервере может не быть звука — проверяем, что это не ломает запись
     }), encoding="utf-8")
@@ -63,9 +64,9 @@ def main() -> None:
         print("  ✓ Kadr.exe работает")
 
         subprocess.run([str(exe), "--full"], env=env, timeout=30)
-        png = wait_for("скриншот всего экрана сохранён (--full)",
-                       lambda: next((p for p in shots.glob("Kadr_*.png") if p.stat().st_size > 1000), None), 30)
-        print(f"    {png.name}: {png.stat().st_size // 1024} КБ")
+        shot = wait_for("скриншот всего экрана сохранён в WEBP (--full)",
+                        lambda: next((p for p in shots.glob("Kadr_*.webp") if p.stat().st_size > 1000), None), 30)
+        print(f"    {shot.name}: {shot.stat().st_size // 1024} КБ")
 
         wait_for("запись повтора пишет сегменты",
                  lambda: len([p for p in replay_dir.glob("seg_*.ts") if p.stat().st_size > 0]) >= 2, 120)
