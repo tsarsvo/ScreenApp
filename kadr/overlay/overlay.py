@@ -22,8 +22,8 @@ from ..capture import ScreenShot
 from ..hotkeys import _MAC_VK
 from ..theme import Tokens
 from .history import History
-from .shapes import (ArrowShape, EllipseShape, PenStroke, RectShape, Shape, TextShape, Tool, TwoPointShape,
-                     font_px_for_width)
+from .shapes import (ArrowShape, EllipseShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
+                     TextShape, Tool, TwoPointShape, font_px_for_width, marker_width)
 from .toolbar import SHADOW, StylePopup, Toolbar
 
 DIM_ALPHA = 115          # непрозрачность затемнения (из 255) — примерно 45%
@@ -42,7 +42,8 @@ _HANDLE_CURSORS = {
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW,
-              Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT}
+              Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT,
+              Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP}
 
 
 def _is_key(event: QKeyEvent, key: Qt.Key) -> bool:
@@ -312,10 +313,15 @@ class Overlay(QWidget):
             self.popup.move_now(pos)
 
     # ------------------------------------------------------------- пипетка
-    def start_picking(self) -> None:
-        """Режим пипетки: курсор-прицел с лупой, клик берёт цвет пикселя скриншота."""
+    def _source_image(self) -> QImage:
+        """Снимок экрана как QImage (нужен пипетке и пикселизации) — создаётся один раз."""
         if self._shot_image is None:
             self._shot_image = self._shot.pixmap.toImage()
+        return self._shot_image
+
+    def start_picking(self) -> None:
+        """Режим пипетки: курсор-прицел с лупой, клик берёт цвет пикселя скриншота."""
+        self._source_image()
         self._picking = True
         self.popup.hide_for_picking()
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -533,7 +539,7 @@ class Overlay(QWidget):
 
     def _update_shape_area(self, before: QRectF) -> None:
         cur = self._current
-        if isinstance(cur, PenStroke) and len(cur.points) >= 2:
+        if type(cur) is PenStroke and len(cur.points) >= 2:
             # штрих растёт с конца — достаточно перерисовать последние сегменты
             tail = cur.points[-4:]
             m = cur.width + 2
@@ -588,15 +594,27 @@ class Overlay(QWidget):
         self._mode = "drawing"
         if self._tool == Tool.PEN:
             self._current = PenStroke(c, w, points=[pos])
+        elif self._tool == Tool.MARKER:
+            self._current = MarkerStroke(c, marker_width(w), points=[pos])
+        elif self._tool == Tool.PIXELATE:
+            self._current = PixelateShape(c, w, start=pos, end=pos, source=self._source_image(), dpr=self._shot.dpr)
+        elif self._tool == Tool.STEP:
+            # номер = количество шагов на снимке + 1 (после Ctrl+Z нумерация продолжается верно)
+            number = sum(isinstance(s, StepShape) for s in self._history.shapes) + 1
+            self._current = StepShape(c, w, pos=pos, number=number)
         else:
             cls = {Tool.ARROW: ArrowShape, Tool.RECT: RectShape, Tool.ELLIPSE: EllipseShape}[self._tool]
             self._current = cls(c, w, start=pos, end=pos)
 
     def _continue_drawing(self, pos: QPointF, shift: bool) -> None:
         cur = self._current
-        if isinstance(cur, PenStroke):
+        if isinstance(cur, MarkerStroke) and shift:
+            cur.points = [cur.points[0], pos]            # Shift: ровная линия маркером
+        elif isinstance(cur, PenStroke):
             if QLineF(cur.points[-1], pos).length() >= 1.0:
                 cur.points.append(pos)
+        elif isinstance(cur, StepShape):
+            cur.pos = pos                                # номер можно перетащить, пока кнопка зажата
         elif isinstance(cur, TwoPointShape):
             if shift and isinstance(cur, ArrowShape):
                 # Shift: стрелка с шагом 45°

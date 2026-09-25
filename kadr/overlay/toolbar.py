@@ -164,6 +164,9 @@ class Toolbar(Panel):
         (Tool.RECT, "rect", "Прямоугольник  (R)"),
         (Tool.ELLIPSE, "ellipse", "Овал  (E)"),
         (Tool.TEXT, "text", "Текст  (T)"),
+        (Tool.MARKER, "highlighter", "Маркер  (M) · Shift — ровная линия"),
+        (Tool.PIXELATE, "pixelate", "Скрыть: пикселизация  (B)"),
+        (Tool.STEP, "step", "Нумерованные шаги  (N)"),
     ]
 
     def __init__(self, parent: QWidget) -> None:

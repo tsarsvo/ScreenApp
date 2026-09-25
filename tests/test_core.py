@@ -274,7 +274,7 @@ def test_partial_repaint_leaves_no_stale_pixels(qapp):
         QTest.mouseMove(o, QPoint(200 + int(90 * math.sin(i)), 150 + int(60 * math.cos(i))))
     QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 220))
     assert stale() == 0
-    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE):
+    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE, Tool.MARKER, Tool.PIXELATE, Tool.STEP):
         o.set_tool(tool)
         QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
         for i in range(15):
@@ -322,4 +322,46 @@ def test_rapid_clicks_do_not_select_screen_or_copy(qapp):
     send(QEvent.Type.MouseButtonRelease, 180, 160)
     send(QEvent.Type.MouseButtonDblClick, 180, 160)
     assert copied
+    o.close()
+
+
+def test_marker_pixelate_and_steps(qapp):
+    from PySide6.QtGui import QPainter
+
+    from kadr.overlay.shapes import MarkerStroke, PixelateShape, StepShape, Tool
+
+    o = _overlay(qapp)
+    # мелкая «шахматка» — секрет, который должна скрыть пикселизация
+    p = QPainter(o._shot.pixmap)
+    for y in range(200, 260, 2):
+        for x in range(200, 300, 2):
+            p.fillRect(QRect(x, y, 1, 1), QColor("#000000"))
+    p.end()
+    _drag(o, (100, 100), (500, 400))
+
+    o.set_tool(Tool.PIXELATE)
+    _drag(o, (190, 190), (310, 270))
+    o.set_tool(Tool.MARKER)
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(120, 350))
+    QTest.mouseMove(o, QPoint(200, 380))
+    QTest.mouseMove(o, QPoint(300, 352), )
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(300, 352))
+    o.set_tool(Tool.STEP)
+    for x in (150, 250, 350):
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, 320))
+
+    kinds = [type(s) for s in o._history.shapes]
+    assert kinds == [PixelateShape, MarkerStroke, StepShape, StepShape, StepShape]
+    marker = o._history.shapes[1]
+    assert len(marker.points) == 2                         # Shift → ровная линия
+    assert [s.number for s in o._history.shapes[2:]] == [1, 2, 3]
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(400, 320))
+    assert o._history.shapes[-1].number == 3               # после отмены нумерация продолжается верно
+
+    # В сохранённом файле «шахматки» больше нет: соседние пиксели внутри блока одинаковые
+    img = o.render_selection()                            # DPR 2 → физические пиксели
+    x0, y0 = (220 - 100) * 2, (220 - 100) * 2
+    block = [img.pixel(x0 + dx, y0 + dy) for dx in range(4) for dy in range(4)]
+    assert len(set(block)) <= 2
     o.close()
