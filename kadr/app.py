@@ -5,6 +5,7 @@ import dataclasses
 import getpass
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, Qt, QTimer, QUrl, Signal
@@ -12,7 +13,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QIma
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import APP_NAME, APP_ID, autostart, icons
+from . import APP_ID, APP_NAME, __version__, autostart, icons
 from .capture import grab_full_desktop, grab_screens
 from .config import SettingsStore
 from .hotkeys import HotkeyManager, label_for
@@ -20,6 +21,7 @@ from .overlay import CaptureSession
 from .replay import ReplayOptions, ReplayRecorder
 from .saver import copy_to_clipboard, save_image
 from .theme import ThemeManager
+from .updater import Updater, can_self_update
 
 # Задержка перед снимком из меню трея — чтобы само меню успело исчезнуть с экрана.
 # По горячей клавише снимок делается сразу.
@@ -64,6 +66,13 @@ class KadrApp(QObject):
         self._save_signals.saved.connect(self._on_saved)
         self._save_signals.failed.connect(lambda e: self.notify(f"Ошибка сохранения: {e}", error=True))
 
+        self.updater = Updater()
+        self.updater.available.connect(self._on_update_available)
+        self.updater.up_to_date.connect(lambda: self.notify(f"У вас последняя версия — {__version__}"))
+        self.updater.failed.connect(lambda e: self.notify(e, error=True))
+        self.updater.downloading.connect(lambda: self.notify("Скачиваю обновление…"))
+        self.updater.ready_to_quit.connect(self.qapp.quit)
+
         self._build_tray()
         self._hotkey_errors = self._register_hotkeys()
         self._sync_autostart()
@@ -73,6 +82,13 @@ class KadrApp(QObject):
             self.notify(self.hotkeys.error, error=True)
         if self.store.data.replay_enabled:
             QTimer.singleShot(1500, self._apply_replay)
+
+        # Обновления: тихая проверка через 10 с после запуска и затем раз в сутки
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(6 * 3600 * 1000)
+        self._update_timer.timeout.connect(self._auto_check_updates)
+        self._update_timer.start()
+        QTimer.singleShot(10_000, self._auto_check_updates)
 
     # -------------------------------------------------------------------- tray
     def _build_tray(self) -> None:
@@ -92,6 +108,12 @@ class KadrApp(QObject):
         self.menu.addSeparator()
         self.act_folder = self.menu.addAction("Открыть папку", self.open_folder)
         self.act_settings = self.menu.addAction("Настройки…", self.open_settings)
+        self.act_update = self.menu.addAction("Обновить", lambda: self.updater.install())
+        self.act_update.setVisible(False)             # появляется, когда вышла новая версия
+        f = self.act_update.font()
+        f.setBold(True)
+        self.act_update.setFont(f)
+        self.act_check_updates = self.menu.addAction("Проверить обновления", lambda: self.updater.check(manual=True))
         self.menu.addSeparator()
         self.act_quit = self.menu.addAction("Выход", self.qapp.quit)
         self._retheme_tray()
@@ -107,6 +129,8 @@ class KadrApp(QObject):
         self.act_folder.setIcon(icons.icon("folder", c))
         self.act_settings.setIcon(icons.icon("settings", c))
         self.act_quit.setIcon(icons.icon("power", c))
+        self.act_update.setIcon(icons.icon("download", self.theme.tokens.accent))
+        self.act_check_updates.setIcon(icons.icon("refresh", c))
         self.act_replay_save.setIcon(icons.icon("replay", c))
         self._update_menu_shortcuts()
 
@@ -197,6 +221,19 @@ class KadrApp(QObject):
 
     def _tray_icon(self) -> QIcon:
         return icons.logo_icon(sys.platform == "darwin")
+
+    # ----------------------------------------------------------------- updates
+    def _auto_check_updates(self) -> None:
+        s = self.store.data
+        if s.check_updates and time.time() - s.last_update_check > 20 * 3600:
+            self.store.set("last_update_check", time.time())
+            self.updater.check()
+
+    def _on_update_available(self, release) -> None:
+        self.act_update.setText(f"Обновить до v{release.version}")
+        self.act_update.setVisible(True)
+        action = "в меню значка" if can_self_update() else "— откроется страница загрузки"
+        self.notify(f"Вышла версия {release.version}. Обновить: «Обновить до v{release.version}» {action}")
 
     def save_replay(self) -> None:
         if not self.replay.running:
