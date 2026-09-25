@@ -134,6 +134,39 @@ def find_iscc() -> str | None:
     return None
 
 
+# Что Kadr не использует, но PyInstaller подтягивает вместе с Qt.
+# Каждый пункт проверен: сквозной прогон Kadr.exe в CI (скриншот, WEBP, запись повтора)
+# выполняется уже на «очищенной» сборке.
+PRUNE = [
+    # экранная клавиатура тянет за собой весь Qt Quick/QML (~15 МБ)
+    "PySide6/Qt*/plugins/platforminputcontexts/*virtualkeyboard*",
+    "PySide6/*Qt6Quick*", "PySide6/*Qt6Qml*", "PySide6/*Qt6VirtualKeyboard*",
+    "PySide6/Qt*/lib/*Qt6Quick*", "PySide6/Qt*/lib/*Qt6Qml*", "PySide6/Qt*/lib/*Qt6VirtualKeyboard*",
+    # чтение PDF как картинки и редкие форматы изображений
+    "PySide6/Qt*/plugins/imageformats/*qpdf*", "PySide6/*Qt6Pdf*", "PySide6/Qt*/lib/*Qt6Pdf*",
+    "PySide6/Qt*/plugins/imageformats/*qtiff*", "PySide6/Qt*/plugins/imageformats/*qtga*",
+    "PySide6/Qt*/plugins/imageformats/*qwbmp*", "PySide6/Qt*/plugins/imageformats/*qicns*",
+    # программный OpenGL (~20 МБ на Windows) — Kadr рисует без OpenGL
+    "PySide6/opengl32sw.dll",
+]
+KEEP_TRANSLATIONS = ("_ru.qm", "_en.qm")
+
+
+def prune_bundle(internal: Path) -> int:
+    """Удаляет из собранной программы неиспользуемые части Qt. Возвращает освобождённые байты."""
+    freed = 0
+    for pattern in PRUNE:
+        for path in internal.glob(pattern):
+            if path.is_file():
+                freed += path.stat().st_size
+                path.unlink()
+    for tr in internal.glob("PySide6/Qt*/translations/*.qm"):
+        if not tr.name.endswith(KEEP_TRANSLATIONS):
+            freed += tr.stat().st_size
+            tr.unlink()
+    return freed
+
+
 def main() -> None:
     version = resolve_version()
     print(f"Версия: {version}")
@@ -150,6 +183,9 @@ def main() -> None:
         "--hidden-import", "pynput.keyboard._darwin",
         "--hidden-import", "pynput.keyboard._win32",
         "--add-data", f"{res / 'logo.ico'}{sep}kadr/resources",
+        # Pillow нужен только при сборке (иконки); в программе WEBP пишет плагин Qt
+        "--exclude-module", "PIL", "--exclude-module", "tkinter", "--exclude-module", "unittest",
+        "--exclude-module", "pydoc", "--exclude-module", "lib2to3",
     ]
     if sys.platform == "win32":
         cmd += ["--hidden-import", "pyaudiowpatch"]
@@ -165,6 +201,9 @@ def main() -> None:
     if sys.platform == "darwin":
         cmd += ["--osx-bundle-identifier", "app.kadr.screenshot"]
     subprocess.run(cmd, check=True, cwd=ROOT)
+    internal = DIST / APP_NAME / "_internal"
+    freed = prune_bundle(internal if internal.exists() else DIST / APP_NAME)
+    print(f"Убрано неиспользуемых частей Qt: {freed / 1e6:.1f} МБ")
 
     if sys.platform == "win32":
         portable = shutil.make_archive(str(DIST / f"{APP_NAME}-portable"), "zip", DIST, APP_NAME)
@@ -177,6 +216,8 @@ def main() -> None:
             print(f"Установщик: {DIST / 'Kadr-Setup.exe'}")
         else:
             print("Inno Setup 6 не найден — установщик не собран (https://jrsoftware.org/isdl.php)")
+    for f in sorted(DIST.glob(f"{APP_NAME}-*")):
+        print(f"  {f.name}: {f.stat().st_size / 1e6:.1f} МБ")
     print(f"Готово: {DIST}")
 
 

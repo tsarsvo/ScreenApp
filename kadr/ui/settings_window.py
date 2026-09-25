@@ -159,6 +159,11 @@ class SettingsWindow(QWidget):
         self._divider(card)
         self._row(card, "Уведомление после сохранения", self._toggle("notify_on_save"))
         self._divider(card)
+        self._row(card, "Проверять обновления", self._toggle("check_updates"), "Раз в сутки, через GitHub")
+        self._divider(card)
+        self._row(card, "История скриншотов", self._toggle("history_enabled"),
+                  "Последние 12 снимков в меню значка → «Недавние»")
+        self._divider(card)
         self.autostart = QCheckBox()
         self.autostart.setChecked(autostart.is_enabled())
         self.autostart.toggled.connect(self._set_autostart)

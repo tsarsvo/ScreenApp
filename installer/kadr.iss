@@ -69,6 +69,8 @@ Name: "{autodesktop}\Kadr"; Filename: "{app}\Kadr.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Kadr.exe"; Description: "{cm:LaunchProgram,Kadr}"; Flags: nowait postinstall skipifsilent
+; Автообновление ставит новую версию тихо — после этого запускаем Kadr снова
+Filename: "{app}\Kadr.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM Kadr.exe /F"; Flags: runhidden; RunOnceId: "StopKadr"

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF
 
 
 class Tool(Enum):
@@ -21,6 +21,9 @@ class Tool(Enum):
     RECT = "rect"
     ELLIPSE = "ellipse"
     TEXT = "text"
+    MARKER = "marker"
+    PIXELATE = "pixelate"
+    STEP = "step"
 
 
 def _pen(color: QColor, width: float, join=Qt.PenJoinStyle.RoundJoin) -> QPen:
@@ -174,3 +177,116 @@ class TextShape(Shape):
         p.setPen(self.color)
         for i, line in enumerate(self.lines()):
             p.drawText(QPointF(self.pos.x(), self.pos.y() + fm.ascent() + i * fm.lineSpacing()), line)
+
+
+@dataclass
+class MarkerStroke(PenStroke):
+    """Маркер: широкая полупрозрачная линия, как у текстовыделителя."""
+
+    ALPHA = 0.38
+
+    def paint(self, p: QPainter) -> None:
+        if not self.points:
+            return
+        p.save()
+        c = QColor(self.color)
+        c.setAlphaF(self.ALPHA)
+        pen = QPen(c, self.width)
+        pen.setCapStyle(Qt.PenCapStyle.SquareCap if len(self.points) == 2 else Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # Весь штрих рисуется одним путём — полупрозрачность не «накладывается» сама на себя
+        path = QPainterPath(self.points[0])
+        if len(self.points) == 1:
+            path.lineTo(self.points[0] + QPointF(0.01, 0))
+        for a, b in zip(self.points[1:-1], self.points[2:]):
+            path.quadTo(a, (a + b) / 2)
+        if len(self.points) > 1:
+            path.lineTo(self.points[-1])
+        p.drawPath(path)
+        p.restore()
+
+
+def marker_width(width: float) -> float:
+    return max(12.0, width * 3.0)
+
+
+@dataclass
+class PixelateShape(TwoPointShape):
+    """Пикселизация области: берёт пиксели исходного скриншота (не нарисованных фигур)
+    и укрупняет их блоками. Восстановить исходное изображение по такому результату нельзя."""
+
+    source: QImage | None = None     # снимок экрана в физических пикселях
+    dpr: float = 1.0
+    _cache_key: tuple | None = None
+    _cache: QImage | None = None
+
+    def block(self) -> int:
+        return max(6, int(self.width * 2.5))   # размер «пикселя» в физических пикселях экрана
+
+    def _pixelated(self) -> QImage | None:
+        r = self.rect()
+        if self.source is None or r.width() < 1 or r.height() < 1:
+            return None
+        key = (r.x(), r.y(), r.width(), r.height(), self.block())
+        if key != self._cache_key:
+            dev = QRectF(r.x() * self.dpr, r.y() * self.dpr, r.width() * self.dpr, r.height() * self.dpr).toRect()
+            dev = dev.intersected(self.source.rect())
+            if dev.isEmpty():
+                return None
+            b = self.block()
+            small = self.source.copy(dev).scaled(max(1, dev.width() // b), max(1, dev.height() // b),
+                                                 Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation)
+            self._cache = small
+            self._cache_key = key
+        return self._cache
+
+    def paint(self, p: QPainter) -> None:
+        img = self._pixelated()
+        if img is None:
+            return
+        p.save()
+        # увеличиваем «ступеньками», без сглаживания — получаются чёткие квадраты
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        p.drawImage(self.rect(), img)
+        p.restore()
+
+    def bounds(self) -> QRectF:
+        return self.rect().adjusted(-2, -2, 2, 2)
+
+    def is_empty(self) -> bool:
+        r = self.rect()
+        return r.width() < 3 or r.height() < 3
+
+
+@dataclass
+class StepShape(Shape):
+    """Нумерованный шаг: цветной кружок с номером — для инструкций."""
+
+    pos: QPointF = field(default_factory=QPointF)
+    number: int = 1
+
+    def radius(self) -> float:
+        return 11 + self.width * 1.6
+
+    def paint(self, p: QPainter) -> None:
+        r = self.radius()
+        p.save()
+        p.setPen(QPen(QColor(255, 255, 255, 230), max(1.5, r * 0.12)))
+        p.setBrush(self.color)
+        p.drawEllipse(self.pos, r, r)
+        f = QFont()
+        f.setPixelSize(int(r * (1.05 if self.number < 10 else 0.85)))
+        f.setWeight(QFont.Weight.Bold)
+        p.setFont(f)
+        # белая цифра на светлом кружке не видна — тогда цифра тёмная
+        p.setPen(QColor("#1C1C1E") if self.color.lightnessF() > 0.72 else QColor("#FFFFFF"))
+        p.drawText(QRectF(self.pos.x() - r, self.pos.y() - r, 2 * r, 2 * r), Qt.AlignmentFlag.AlignCenter,
+                   str(self.number))
+        p.restore()
+
+    def bounds(self) -> QRectF:
+        r = self.radius() + 3
+        return QRectF(self.pos.x() - r, self.pos.y() - r, 2 * r, 2 * r)

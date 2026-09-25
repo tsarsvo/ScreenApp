@@ -22,14 +22,15 @@ from ..capture import ScreenShot
 from ..hotkeys import _MAC_VK
 from ..theme import Tokens
 from .history import History
-from .shapes import (ArrowShape, EllipseShape, PenStroke, RectShape, Shape, TextShape, Tool, TwoPointShape,
-                     font_px_for_width)
+from .shapes import (ArrowShape, EllipseShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
+                     TextShape, Tool, TwoPointShape, font_px_for_width, marker_width)
 from .toolbar import SHADOW, StylePopup, Toolbar
 
 DIM_ALPHA = 115          # непрозрачность затемнения (из 255) — примерно 45%
 HANDLE_R = 4.0           # радиус «ручки» изменения размера
 HANDLE_HIT = 9           # зона попадания по ручке
 GAP = 8                  # отступ панели от выделения
+MIN_SELECTION = 4        # меньше — считаем кликом, а не выделением
 
 # Ручки: (id, доля по x, доля по y)
 _HANDLES = [("tl", 0, 0), ("t", .5, 0), ("tr", 1, 0), ("r", 1, .5),
@@ -41,7 +42,8 @@ _HANDLE_CURSORS = {
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW,
-              Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT}
+              Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT,
+              Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP}
 
 
 def _is_key(event: QKeyEvent, key: Qt.Key) -> bool:
@@ -77,6 +79,7 @@ class Overlay(QWidget):
     cancelled = Signal()
     style_changed = Signal(QColor, int)
     palette_changed = Signal(list)
+    pin_requested = Signal(QImage, QPoint, float)   # снимок, левый верхний угол на экране, DPR
 
     def __init__(self, shot: ScreenShot, tokens: Tokens, color: QColor, width: int,
                  palette: list[str] | None = None) -> None:
@@ -135,6 +138,7 @@ class Overlay(QWidget):
         self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)
         self.toolbar.save.connect(self._save)
+        self.toolbar.pin.connect(self._pin)
         self.toolbar.cancel.connect(self.cancelled)
         self.toolbar.style_clicked.connect(self._toggle_popup)
 
@@ -190,6 +194,16 @@ class Overlay(QWidget):
         self._mode = "idle"
         self.toolbar.hide()
         self.popup.hide()
+        self.update()
+
+    def select_all(self) -> None:
+        """Ctrl+A — выделить весь экран."""
+        self._commit_text()
+        if not self._sel:
+            self.selection_started.emit(self)
+        self._sel = QRect(self.rect())
+        self._mode = "idle"
+        self._place_toolbar()
         self.update()
 
     def render_selection(self) -> QImage:
@@ -271,6 +285,10 @@ class Overlay(QWidget):
         if self._sel:
             self.save_requested.emit(self.render_selection())
 
+    def _pin(self) -> None:
+        if self._sel:
+            self.pin_requested.emit(self.render_selection(), self.mapToGlobal(self._sel.topLeft()), self._shot.dpr)
+
     def _toggle_popup(self) -> None:
         if self.popup.isVisible():
             self.popup.hide()
@@ -301,10 +319,15 @@ class Overlay(QWidget):
             self.popup.move_now(pos)
 
     # ------------------------------------------------------------- пипетка
-    def start_picking(self) -> None:
-        """Режим пипетки: курсор-прицел с лупой, клик берёт цвет пикселя скриншота."""
+    def _source_image(self) -> QImage:
+        """Снимок экрана как QImage (нужен пипетке и пикселизации) — создаётся один раз."""
         if self._shot_image is None:
             self._shot_image = self._shot.pixmap.toImage()
+        return self._shot_image
+
+    def start_picking(self) -> None:
+        """Режим пипетки: курсор-прицел с лупой, клик берёт цвет пикселя скриншота."""
+        self._source_image()
         self._picking = True
         self.popup.hide_for_picking()
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -430,8 +453,13 @@ class Overlay(QWidget):
             return
         mode, self._mode = self._mode, "idle"
         if mode == "selecting":
-            if self._sel.width() < 3 or self._sel.height() < 3:
-                self._sel = QRect(self.rect())  # простой клик — весь экран
+            if self._sel.width() < MIN_SELECTION or self._sel.height() < MIN_SELECTION:
+                # Клик без протяжки (или случайное «дрожание» мыши) ничего не выделяет —
+                # раньше он выделял весь экран, и при быстрых кликах панель «уезжала» в угол
+                old = QRect(self._sel)
+                self._sel = None
+                self.update(self._selection_area(old))
+                return
             self._place_toolbar()
         elif mode in ("moving", "resizing"):
             if self._sel.width() < 3 or self._sel.height() < 3:
@@ -449,9 +477,15 @@ class Overlay(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
-        # Двойной клик внутри выделения в режиме «Выделение» — сразу скопировать
-        if self._tool == Tool.SELECT and self._sel and self._sel.contains(e.position().toPoint()):
+        # Двойной клик внутри уже готового выделения в режиме «Выделение» — скопировать.
+        # Во всех остальных случаях (например, два резких клика по пустому месту) второй
+        # клик — это обычное нажатие: Qt присылает его как DoubleClick вместо Press.
+        pos = e.position().toPoint()
+        if (e.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT and self._sel
+                and self._sel.contains(pos) and self._hit_handle(pos) is None and not self._picking):
             self._copy()
+            return
+        self.mousePressEvent(e)
 
     def wheelEvent(self, e: QWheelEvent) -> None:
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -511,7 +545,7 @@ class Overlay(QWidget):
 
     def _update_shape_area(self, before: QRectF) -> None:
         cur = self._current
-        if isinstance(cur, PenStroke) and len(cur.points) >= 2:
+        if type(cur) is PenStroke and len(cur.points) >= 2:
             # штрих растёт с конца — достаточно перерисовать последние сегменты
             tail = cur.points[-4:]
             m = cur.width + 2
@@ -566,15 +600,27 @@ class Overlay(QWidget):
         self._mode = "drawing"
         if self._tool == Tool.PEN:
             self._current = PenStroke(c, w, points=[pos])
+        elif self._tool == Tool.MARKER:
+            self._current = MarkerStroke(c, marker_width(w), points=[pos])
+        elif self._tool == Tool.PIXELATE:
+            self._current = PixelateShape(c, w, start=pos, end=pos, source=self._source_image(), dpr=self._shot.dpr)
+        elif self._tool == Tool.STEP:
+            # номер = количество шагов на снимке + 1 (после Ctrl+Z нумерация продолжается верно)
+            number = sum(isinstance(s, StepShape) for s in self._history.shapes) + 1
+            self._current = StepShape(c, w, pos=pos, number=number)
         else:
             cls = {Tool.ARROW: ArrowShape, Tool.RECT: RectShape, Tool.ELLIPSE: EllipseShape}[self._tool]
             self._current = cls(c, w, start=pos, end=pos)
 
     def _continue_drawing(self, pos: QPointF, shift: bool) -> None:
         cur = self._current
-        if isinstance(cur, PenStroke):
+        if isinstance(cur, MarkerStroke) and shift:
+            cur.points = [cur.points[0], pos]            # Shift: ровная линия маркером
+        elif isinstance(cur, PenStroke):
             if QLineF(cur.points[-1], pos).length() >= 1.0:
                 cur.points.append(pos)
+        elif isinstance(cur, StepShape):
+            cur.pos = pos                                # номер можно перетащить, пока кнопка зажата
         elif isinstance(cur, TwoPointShape):
             if shift and isinstance(cur, ArrowShape):
                 # Shift: стрелка с шагом 45°
@@ -635,6 +681,10 @@ class Overlay(QWidget):
             self._copy()
         elif ctrl and _is_key(e, Qt.Key.Key_S):
             self._save()
+        elif ctrl and _is_key(e, Qt.Key.Key_A):
+            self.select_all()
+        elif ctrl and _is_key(e, Qt.Key.Key_T):
+            self._pin()
         elif self._sel and not ctrl and _is_key(e, Qt.Key.Key_I):
             self.start_picking()
         elif self._sel and not ctrl:
@@ -749,7 +799,7 @@ class Overlay(QWidget):
         self._pill(p, QRectF(x, y, w, 20), text, f)
 
     def _paint_hint(self, p: QPainter) -> None:
-        text = "Выделите область  ·  клик — весь экран  ·  Esc — отмена"
+        text = "Выделите область  ·  Ctrl+A — весь экран  ·  Esc — отмена"
         f = self._fonts.hint
         w = self._fonts.hint_metrics.horizontalAdvance(text) + 28
         p.setOpacity(self._dim)

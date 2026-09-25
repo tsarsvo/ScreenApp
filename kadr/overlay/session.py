@@ -1,7 +1,7 @@
 """Сессия захвата области: по оверлею на каждый монитор, общий результат."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QPoint, Signal
 from PySide6.QtGui import QColor, QCursor, QImage
 
 from ..capture import ScreenShot
@@ -14,6 +14,7 @@ class CaptureSession(QObject):
     save_requested = Signal(QImage)
     style_changed = Signal(QColor, int)
     palette_changed = Signal(list)
+    pin_requested = Signal(QImage, QPoint, float)
     finished = Signal()
 
     def __init__(self, shots: list[ScreenShot], tokens: Tokens, color: QColor, width: int,
@@ -28,6 +29,7 @@ class CaptureSession(QObject):
             o.copy_requested.connect(lambda img: self._finish(self.copy_requested, img))
             o.save_requested.connect(lambda img: self._finish(self.save_requested, img))
             o.cancelled.connect(lambda: self._finish(None, None))
+            o.pin_requested.connect(self._on_pin)
             o.style_changed.connect(self._on_style_changed)
             self.overlays.append(o)
 
@@ -48,6 +50,10 @@ class CaptureSession(QObject):
         for o in self.overlays:
             o.set_style(color, width)
         self.style_changed.emit(color, width)
+
+    def _on_pin(self, image: QImage, top_left: QPoint, dpr: float) -> None:
+        self._finish(None, None)
+        self.pin_requested.emit(image, top_left, dpr)
 
     def _finish(self, signal, image) -> None:
         if self._done:

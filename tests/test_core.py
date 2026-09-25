@@ -128,7 +128,9 @@ def test_overlay_select_draw_export(qapp):
 def test_overlay_move_resize_and_click_fullscreen(qapp):
     o = _overlay(qapp)
     QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(50, 50))
-    assert o._sel == o.rect()                          # клик без протяжки — весь экран
+    assert o._sel is None and not o.toolbar.isVisible()   # клик без протяжки ничего не выделяет
+    QTest.keyClick(o, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert o._sel == o.rect()                             # Ctrl+A — весь экран
     o.reset_selection()
     _drag(o, (100, 100), (300, 250))
     _drag(o, (200, 200), (250, 220))                   # перемещение (инструмент «Выделение»)
@@ -272,7 +274,7 @@ def test_partial_repaint_leaves_no_stale_pixels(qapp):
         QTest.mouseMove(o, QPoint(200 + int(90 * math.sin(i)), 150 + int(60 * math.cos(i))))
     QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 220))
     assert stale() == 0
-    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE):
+    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE, Tool.MARKER, Tool.PIXELATE, Tool.STEP):
         o.set_tool(tool)
         QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
         for i in range(15):
@@ -282,4 +284,143 @@ def test_partial_repaint_leaves_no_stale_pixels(qapp):
         assert stale() == 0, tool
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert stale() == 0
+    o.close()
+
+
+def test_rapid_clicks_do_not_select_screen_or_copy(qapp):
+    """Баг: резкий повторный клик выделял весь экран, панель уезжала в угол, а двойной клик
+    копировал весь экран и закрывал оверлей. Воспроизводим точную последовательность Windows:
+    нажатие, отпускание, двойной клик, отпускание."""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    o = _overlay(qapp)
+    copied = []
+    o.copy_requested.connect(copied.append)
+
+    def send(kind, x, y):
+        p = QPointF(x, y)
+        buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+        qapp.sendEvent(o, QMouseEvent(kind, p, o.mapToGlobal(p), Qt.MouseButton.LeftButton, buttons,
+                                      Qt.KeyboardModifier.NoModifier))
+
+    for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                 QEvent.Type.MouseButtonDblClick, QEvent.Type.MouseButtonRelease):
+        send(kind, 300, 200)
+    assert o._sel is None and not o.toolbar.isVisible() and not copied
+
+    # второй резкий клик сразу переходит в протяжку — это должно стать обычным выделением
+    send(QEvent.Type.MouseButtonPress, 100, 100)
+    send(QEvent.Type.MouseButtonRelease, 100, 100)
+    send(QEvent.Type.MouseButtonDblClick, 100, 100)
+    QTest.mouseMove(o, QPoint(260, 220))
+    send(QEvent.Type.MouseButtonRelease, 260, 220)
+    assert o._sel == QRect(QPoint(100, 100), QPoint(260, 220)) and not copied
+
+    # а двойной клик внутри готового выделения по-прежнему копирует
+    send(QEvent.Type.MouseButtonPress, 180, 160)
+    send(QEvent.Type.MouseButtonRelease, 180, 160)
+    send(QEvent.Type.MouseButtonDblClick, 180, 160)
+    assert copied
+    o.close()
+
+
+def test_marker_pixelate_and_steps(qapp):
+    from PySide6.QtGui import QPainter
+
+    from kadr.overlay.shapes import MarkerStroke, PixelateShape, StepShape, Tool
+
+    o = _overlay(qapp)
+    # мелкая «шахматка» — секрет, который должна скрыть пикселизация
+    p = QPainter(o._shot.pixmap)
+    for y in range(200, 260, 2):
+        for x in range(200, 300, 2):
+            p.fillRect(QRect(x, y, 1, 1), QColor("#000000"))
+    p.end()
+    _drag(o, (100, 100), (500, 400))
+
+    o.set_tool(Tool.PIXELATE)
+    _drag(o, (190, 190), (310, 270))
+    o.set_tool(Tool.MARKER)
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(120, 350))
+    QTest.mouseMove(o, QPoint(200, 380))
+    QTest.mouseMove(o, QPoint(300, 352), )
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(300, 352))
+    o.set_tool(Tool.STEP)
+    for x in (150, 250, 350):
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, 320))
+
+    kinds = [type(s) for s in o._history.shapes]
+    assert kinds == [PixelateShape, MarkerStroke, StepShape, StepShape, StepShape]
+    marker = o._history.shapes[1]
+    assert len(marker.points) == 2                         # Shift → ровная линия
+    assert [s.number for s in o._history.shapes[2:]] == [1, 2, 3]
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(400, 320))
+    assert o._history.shapes[-1].number == 3               # после отмены нумерация продолжается верно
+
+    # В сохранённом файле «шахматки» больше нет: соседние пиксели внутри блока одинаковые
+    img = o.render_selection()                            # DPR 2 → физические пиксели
+    x0, y0 = (220 - 100) * 2, (220 - 100) * 2
+    block = [img.pixel(x0 + dx, y0 + dy) for dx in range(4) for dy in range(4)]
+    assert len(set(block)) <= 2
+    o.close()
+
+
+def test_history_keeps_last_items(qapp, tmp_path):
+    import time
+
+    from kadr.history import MAX_ITEMS, History
+
+    h = History(tmp_path / "history")
+    img = QImage(40, 30, QImage.Format.Format_RGB32)
+    for i in range(MAX_ITEMS + 3):
+        img.fill(QColor(i * 10, 0, 0))
+        h.add(img)
+        time.sleep(0.01)
+    deadline = time.time() + 10
+    while len(list((tmp_path / "history").glob("shot_*.png"))) != MAX_ITEMS and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.2)
+    items = h.items()
+    assert len(items) == MAX_ITEMS
+    assert QImage(str(items[0])).pixelColor(0, 0).red() == (MAX_ITEMS + 2) * 10   # новые — сверху
+    assert "сегодня" in History.label(items[0])
+    h.clear()
+    assert h.items() == []
+
+
+def test_pin_window_zoom_opacity_close(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(200, 100, QImage.Format.Format_RGB32)
+    img.fill(QColor("#3F6BFF"))
+    w = PinWindow(img, 2.0, QPoint(100, 100))          # DPR 2 → 100×50 логических
+    w.show()
+    assert (w.width(), w.height()) == (102, 52)
+
+    def wheel(delta, mods=Qt.KeyboardModifier.NoModifier):
+        qapp.sendEvent(w, QWheelEvent(QPointF(10, 10), QPointF(110, 110), QPoint(), QPoint(0, delta),
+                                      Qt.MouseButton.NoButton, mods, Qt.ScrollPhase.NoScrollPhase, False))
+
+    wheel(120)
+    assert w.width() > 102                               # колесо — увеличить
+    wheel(-120, Qt.KeyboardModifier.ControlModifier)
+    assert w.windowOpacity() < 1.0                       # Ctrl+колесо — прозрачнее
+    closed = []
+    w.closed.connect(closed.append)
+    QTest.keyClick(w, Qt.Key.Key_Escape)
+    assert closed
+
+
+def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
+    o = _overlay(qapp)
+    _drag(o, (100, 80), (300, 200))
+    got = []
+    o.pin_requested.connect(lambda img, pt, dpr: got.append((img.size(), pt, dpr)))
+    QTest.keyClick(o, Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier)
+    assert got and got[0][1] == o.mapToGlobal(QPoint(100, 80)) and got[0][2] == 2.0
     o.close()

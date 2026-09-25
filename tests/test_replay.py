@@ -77,8 +77,10 @@ def test_collect_segments_takes_newest_by_mtime(tmp_path):
         p = tmp_path / n
         p.write_bytes(b"x")
         os.utime(p, (now + i, now + i))
-    got = collect_segments(tmp_path, minutes=1)  # 60/SEG + 1 сегментов
+    got = collect_segments(tmp_path, minutes=1, include_current=True)  # 60/SEG + 1 сегментов
     assert [p.name for p in got] == names[-(60 // rec.SEG + 1):]
+    # по умолчанию самый новый (ещё дописываемый) сегмент не берётся
+    assert collect_segments(tmp_path, minutes=1)[-1].name == names[-2]
 
 
 def test_bitrate_is_sane():
@@ -109,7 +111,7 @@ def test_segments_concat_into_mp4(tmp_path):
                     *rec.ff.encoder_args(encoders[0], 500, 15, rec.SEG), "-c:a", "aac",
                     "-f", "segment", "-segment_time", str(rec.SEG), "-segment_format", "mpegts",
                     "-reset_timestamps", "1", str(tmp_path / "seg_%03d.ts")], check=True, timeout=60)
-    segs = collect_segments(tmp_path, minutes=1)
+    segs = collect_segments(tmp_path, minutes=1, include_current=True)   # запись окончена — все целые
     out = tmp_path / "out.mp4"
     rec.concat_segments(ffmpeg, segs, out)
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
@@ -192,3 +194,30 @@ def test_ffmpeg_child_dies_with_kadr(tmp_path, attempt):
     before = beat.read_text()
     time.sleep(1.0)
     assert beat.read_text() == before, "дочерний процесс пережил родителя"
+
+
+def test_save_waits_for_current_segment_to_finish(tmp_path):
+    """Нажали «Сохранить» посреди сегмента: ждём, пока он допишется, и берём его целым,
+    а только что начатый (оборванный) — нет."""
+    import threading
+
+    for i, name in enumerate(("seg_000.ts", "seg_001.ts")):
+        p = tmp_path / name
+        p.write_bytes(b"x")
+        os.utime(p, ns=(time.time_ns() + i * 10**6, time.time_ns() + i * 10**6))
+    writing = tmp_path / "seg_001.ts"             # «дописывается» в момент нажатия
+
+    def ffmpeg_rolls_over():
+        time.sleep(0.4)
+        writing.write_bytes(b"xx")                # дописали
+        nxt = tmp_path / "seg_002.ts"
+        nxt.write_bytes(b"y")                     # и начали следующий
+        t = time.time_ns() + 10**9
+        os.utime(nxt, ns=(t, t))
+
+    threading.Thread(target=ffmpeg_rolls_over).start()
+    t0 = time.monotonic()
+    assert rec.wait_for_rollover(tmp_path, timeout=5)
+    assert 0.3 < time.monotonic() - t0 < 3
+    names = [p.name for p in collect_segments(tmp_path, minutes=1)]
+    assert names[-1] == "seg_001.ts" and "seg_002.ts" not in names
