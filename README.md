@@ -262,14 +262,13 @@ python scripts/fetch_ffmpeg.py                    # Windows: FFmpeg в kadr/bin
 python scripts/build.py                           # dist/Kadr-Setup.exe и dist/Kadr-portable.zip
 ```
 
-**Новая версия** выпускается одним тегом. Номер берётся из тега, править код не нужно:
+**Новая версия выпускается из браузера**, править код не нужно:
 
-```bash
-git checkout main && git pull
-git tag v1.1.0 && git push origin v1.1.0
-```
+1. Откройте **Actions → Windows build → Run workflow**.
+2. Выберите ветку `main`, в поле версии введите номер, например `1.1.0`, и нажмите **Run workflow**.
+3. Примерно через 4 минуты в **Releases** появится **Kadr v1.1.0** с `Kadr-Setup.exe` и `Kadr-portable.zip`.
 
-GitHub Actions соберёт установщик и опубликует релиз **Kadr v1.1.0**. Кнопка «Скачать» в начале README всегда ведёт на последний релиз.
+Можно и через git: `git tag v1.1.0 && git push origin v1.1.0`. Кнопка «Скачать» в начале README всегда ведёт на последний релиз.
 
 </details>
 
