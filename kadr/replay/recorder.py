@@ -131,12 +131,43 @@ def _display() -> str:
     return os.environ.get("DISPLAY", ":0")
 
 
-def collect_segments(folder: Path, minutes: int) -> list[Path]:
-    """Последние сегменты, покрывающие `minutes` минут (с запасом в один сегмент)."""
-    segs = sorted((p for p in folder.glob("seg_*.ts") if p.stat().st_size > 0),
-                  key=lambda p: p.stat().st_mtime_ns)
+def _ordered_segments(folder: Path) -> list[Path]:
+    segs = []
+    for p in folder.glob("seg_*.ts"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue  # файл перезаписывается по кругу прямо сейчас
+        if st.st_size > 0:
+            segs.append((st.st_mtime_ns, p))
+    return [p for _, p in sorted(segs)]
+
+
+def collect_segments(folder: Path, minutes: int, include_current: bool = False) -> list[Path]:
+    """Последние сегменты, покрывающие `minutes` минут (с запасом в один сегмент).
+    Самый новый сегмент FFmpeg ещё дописывает — его последний кадр оборван, поэтому
+    по умолчанию он не берётся (см. wait_for_rollover)."""
+    segs = _ordered_segments(folder)
+    if not include_current:
+        segs = segs[:-1]
     need = math.ceil(minutes * 60 / SEG) + 1
     return segs[-need:]
+
+
+def wait_for_rollover(folder: Path, timeout: float, poll: float = 0.1) -> bool:
+    """Ждём, пока FFmpeg закончит текущий сегмент и начнёт следующий. Тогда отрезок,
+    в который пользователь нажал «Сохранить», уже целиком на диске."""
+    segs = _ordered_segments(folder)
+    if not segs:
+        return False
+    writing = segs[-1]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        segs = _ordered_segments(folder)
+        if segs and segs[-1] != writing:
+            return True
+        time.sleep(poll)
+    return False
 
 
 def concat_segments(ffmpeg: str, segments: list[Path], out: Path) -> None:
@@ -382,6 +413,9 @@ class ReplayRecorder(QObject):
     def _save(self, save_dir: str, minutes: int) -> None:
         try:
             exe = ff.find_ffmpeg()
+            # Дожидаемся конца текущего сегмента (≤ SEG секунд): иначе в ролик попал бы
+            # недописанный кусок с оборванным последним кадром
+            wait_for_rollover(self.dir, SEG + 3)
             segs = collect_segments(self.dir, minutes)
             if not segs:
                 raise RuntimeError("Буфер ещё пуст — подождите несколько секунд")

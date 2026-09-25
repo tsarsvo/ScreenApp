@@ -246,6 +246,7 @@ class KadrApp(QObject):
         if not self.replay.running:
             self.notify("Запись повтора выключена — включите её в настройках", error=True)
             return
+        self.notify("Сохраняю повтор…")
         self.replay.save(self.store.data.save_dir)
 
     def _sync_autostart(self) -> None:
