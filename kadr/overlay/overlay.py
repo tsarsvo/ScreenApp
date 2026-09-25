@@ -79,6 +79,7 @@ class Overlay(QWidget):
     cancelled = Signal()
     style_changed = Signal(QColor, int)
     palette_changed = Signal(list)
+    pin_requested = Signal(QImage, QPoint, float)   # снимок, левый верхний угол на экране, DPR
 
     def __init__(self, shot: ScreenShot, tokens: Tokens, color: QColor, width: int,
                  palette: list[str] | None = None) -> None:
@@ -137,6 +138,7 @@ class Overlay(QWidget):
         self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)
         self.toolbar.save.connect(self._save)
+        self.toolbar.pin.connect(self._pin)
         self.toolbar.cancel.connect(self.cancelled)
         self.toolbar.style_clicked.connect(self._toggle_popup)
 
@@ -282,6 +284,10 @@ class Overlay(QWidget):
     def _save(self) -> None:
         if self._sel:
             self.save_requested.emit(self.render_selection())
+
+    def _pin(self) -> None:
+        if self._sel:
+            self.pin_requested.emit(self.render_selection(), self.mapToGlobal(self._sel.topLeft()), self._shot.dpr)
 
     def _toggle_popup(self) -> None:
         if self.popup.isVisible():
@@ -677,6 +683,8 @@ class Overlay(QWidget):
             self._save()
         elif ctrl and _is_key(e, Qt.Key.Key_A):
             self.select_all()
+        elif ctrl and _is_key(e, Qt.Key.Key_T):
+            self._pin()
         elif self._sel and not ctrl and _is_key(e, Qt.Key.Key_I):
             self.start_picking()
         elif self._sel and not ctrl:

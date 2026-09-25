@@ -365,3 +365,62 @@ def test_marker_pixelate_and_steps(qapp):
     block = [img.pixel(x0 + dx, y0 + dy) for dx in range(4) for dy in range(4)]
     assert len(set(block)) <= 2
     o.close()
+
+
+def test_history_keeps_last_items(qapp, tmp_path):
+    import time
+
+    from kadr.history import MAX_ITEMS, History
+
+    h = History(tmp_path / "history")
+    img = QImage(40, 30, QImage.Format.Format_RGB32)
+    for i in range(MAX_ITEMS + 3):
+        img.fill(QColor(i * 10, 0, 0))
+        h.add(img)
+        time.sleep(0.01)
+    deadline = time.time() + 10
+    while len(list((tmp_path / "history").glob("shot_*.png"))) != MAX_ITEMS and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.2)
+    items = h.items()
+    assert len(items) == MAX_ITEMS
+    assert QImage(str(items[0])).pixelColor(0, 0).red() == (MAX_ITEMS + 2) * 10   # новые — сверху
+    assert "сегодня" in History.label(items[0])
+    h.clear()
+    assert h.items() == []
+
+
+def test_pin_window_zoom_opacity_close(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(200, 100, QImage.Format.Format_RGB32)
+    img.fill(QColor("#3F6BFF"))
+    w = PinWindow(img, 2.0, QPoint(100, 100))          # DPR 2 → 100×50 логических
+    w.show()
+    assert (w.width(), w.height()) == (102, 52)
+
+    def wheel(delta, mods=Qt.KeyboardModifier.NoModifier):
+        qapp.sendEvent(w, QWheelEvent(QPointF(10, 10), QPointF(110, 110), QPoint(), QPoint(0, delta),
+                                      Qt.MouseButton.NoButton, mods, Qt.ScrollPhase.NoScrollPhase, False))
+
+    wheel(120)
+    assert w.width() > 102                               # колесо — увеличить
+    wheel(-120, Qt.KeyboardModifier.ControlModifier)
+    assert w.windowOpacity() < 1.0                       # Ctrl+колесо — прозрачнее
+    closed = []
+    w.closed.connect(closed.append)
+    QTest.keyClick(w, Qt.Key.Key_Escape)
+    assert closed
+
+
+def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
+    o = _overlay(qapp)
+    _drag(o, (100, 80), (300, 200))
+    got = []
+    o.pin_requested.connect(lambda img, pt, dpr: got.append((img.size(), pt, dpr)))
+    QTest.keyClick(o, Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier)
+    assert got and got[0][1] == o.mapToGlobal(QPoint(100, 80)) and got[0][2] == 2.0
+    o.close()

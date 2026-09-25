@@ -8,8 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter
+from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -21,6 +21,8 @@ from .overlay import CaptureSession
 from .replay import ReplayOptions, ReplayRecorder
 from .saver import copy_to_clipboard, save_image
 from .theme import ThemeManager
+from .history import History
+from .pin import PinWindow
 from .updater import Updater, can_self_update
 
 # Задержка перед снимком из меню трея — чтобы само меню успело исчезнуть с экрана.
@@ -66,6 +68,8 @@ class KadrApp(QObject):
         self._save_signals.saved.connect(self._on_saved)
         self._save_signals.failed.connect(lambda e: self.notify(f"Ошибка сохранения: {e}", error=True))
 
+        self.history = History(self.store.path.parent / "history")
+        self._pins: list[PinWindow] = []
         self.updater = Updater()
         self.updater.available.connect(self._on_update_available)
         self.updater.up_to_date.connect(lambda: self.notify(f"У вас последняя версия — {__version__}"))
@@ -106,6 +110,8 @@ class KadrApp(QObject):
         self.act_replay_toggle.setChecked(self.store.data.replay_enabled)
         self.act_replay_toggle.toggled.connect(lambda on: self.store.set("replay_enabled", on))
         self.menu.addSeparator()
+        self.recent_menu = self.menu.addMenu("Недавние")
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         self.act_folder = self.menu.addAction("Открыть папку", self.open_folder)
         self.act_settings = self.menu.addAction("Настройки…", self.open_settings)
         self.act_update = self.menu.addAction("Обновить", lambda: self.updater.install())
@@ -129,6 +135,7 @@ class KadrApp(QObject):
         self.act_folder.setIcon(icons.icon("folder", c))
         self.act_settings.setIcon(icons.icon("settings", c))
         self.act_quit.setIcon(icons.icon("power", c))
+        self.recent_menu.setIcon(icons.icon("history", c))
         self.act_update.setIcon(icons.icon("download", self.theme.tokens.accent))
         self.act_check_updates.setIcon(icons.icon("refresh", c))
         self.act_replay_save.setIcon(icons.icon("replay", c))
@@ -294,6 +301,7 @@ class KadrApp(QObject):
         self.session = CaptureSession(shots, self.theme.tokens, QColor(s.pen_color), s.pen_width, s.palette)
         self.session.palette_changed.connect(lambda pal: self.store.set("palette", list(pal)))
         self.session.copy_requested.connect(self._copy)
+        self.session.pin_requested.connect(self.pin_image)
         self.session.save_requested.connect(self._save)
         self.session.style_changed.connect(self._remember_style)
         self.session.finished.connect(self._on_session_finished)
@@ -310,10 +318,12 @@ class KadrApp(QObject):
 
     def _copy(self, img: QImage) -> None:
         copy_to_clipboard(img)
+        self._remember(img)
         if self.store.data.notify_on_save:
             self.notify("Скопировано в буфер обмена")
 
     def _save(self, img: QImage) -> None:
+        self._remember(img)
         settings = dataclasses.replace(self.store.data)   # снимок настроек для фонового потока
         signals = self._save_signals
 
@@ -324,6 +334,45 @@ class KadrApp(QObject):
                 signals.failed.emit(str(exc))
 
         threading.Thread(target=work, daemon=False, name="kadr-save").start()
+
+    # ------------------------------------------------------- история и пины
+    def _remember(self, img: QImage) -> None:
+        if self.store.data.history_enabled:
+            self.history.add(img)
+
+    def pin_image(self, img: QImage, top_left: QPoint | None = None, dpr: float = 1.0) -> None:
+        """Закрепить снимок поверх всех окон."""
+        if top_left is None:
+            top_left = QCursor.pos() - QPoint(40, 40)
+        pin = PinWindow(img, dpr, top_left, self.theme.tokens.accent)
+        pin.copy_requested.connect(self._copy)
+        pin.save_requested.connect(self._save)
+        pin.closed.connect(lambda w: self._pins.remove(w) if w in self._pins else None)
+        self._pins.append(pin)
+        pin.show()
+        pin.raise_()
+        self._remember(img)
+
+    def _fill_recent_menu(self) -> None:
+        """Подменю «Недавние» собирается при каждом открытии — всегда актуальное."""
+        m = self.recent_menu
+        m.clear()
+        items = self.history.items()
+        if not items:
+            empty = m.addAction("Пока пусто" if self.store.data.history_enabled else "История выключена в настройках")
+            empty.setEnabled(False)
+            return
+        for path in items:
+            sub = m.addMenu(History.thumbnail(path), History.label(path))
+            sub.addAction("Копировать", lambda p=path: self._copy_from_history(p))
+            sub.addAction("Закрепить на экране", lambda p=path: self.pin_image(QImage(str(p))))
+            sub.addAction("Открыть", lambda p=path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(p))))
+        m.addSeparator()
+        m.addAction("Очистить историю", self.history.clear)
+
+    def _copy_from_history(self, path) -> None:
+        copy_to_clipboard(QImage(str(path)))
+        self.notify("Скопировано в буфер обмена")
 
     def _on_saved(self, path) -> None:
         if self.store.data.notify_on_save:

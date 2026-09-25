@@ -50,6 +50,7 @@ class Settings:
     show_cursor: bool = False
     autostart: bool = False
     notify_on_save: bool = True
+    history_enabled: bool = True       # хранить последние снимки для меню «Недавние»
     check_updates: bool = True         # раз в сутки спрашивать GitHub о новой версии
     last_update_check: float = 0.0
     theme: str = "system"              # system | light | dark

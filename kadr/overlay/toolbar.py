@@ -154,6 +154,7 @@ class Toolbar(Panel):
     redo = Signal()
     copy = Signal()
     save = Signal()
+    pin = Signal()
     cancel = Signal()  # не `close` — иначе затеним QWidget.close()
     style_clicked = Signal()
 
@@ -194,6 +195,7 @@ class Toolbar(Panel):
         self.undo_btn = self._action("undo", "Назад  (Ctrl+Z)", self.undo, row)
         self.redo_btn = self._action("redo", "Вперёд  (Ctrl+Y)", self.redo, row)
         row.addWidget(self._sep())
+        self._action("pin", "Закрепить поверх окон  (Ctrl+T)", self.pin, row)
         self._action("copy", "Скопировать в буфер  (Ctrl+C / Enter)", self.copy, row)
         self._action("save", "Сохранить в папку  (Ctrl+S)", self.save, row)
         row.addWidget(self._sep())
