@@ -143,3 +143,143 @@ def test_toolbar_goes_above_when_no_room_below(qapp):
     _drag(o, (100, 300), (500, 590))
     assert o.toolbar.geometry().center().y() < o._sel.top()
     o.close()
+
+
+def test_hotkey_any_key_without_modifiers(qapp):
+    """Свободный выбор: одиночная клавиша без Ctrl/Shift допустима."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+
+    from kadr.hotkeys import hotkey_from_event
+    from kadr.ui.widgets import HotkeyEdit
+
+    for key, name in ((Qt.Key.Key_S, "s"), (Qt.Key.Key_Delete, "delete"), (Qt.Key.Key_F9, "f9")):
+        hk = hotkey_from_event(QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+        assert isinstance(hk, Hotkey) and hk.serialize() == name
+
+    # Windows шлёт для PrtSc только отпускание клавиши — его тоже нужно ловить
+    edit = HotkeyEdit("ctrl+a")
+    got = []
+    edit.hotkey_changed.connect(got.append)
+    edit._start()
+    qapp.sendEvent(edit, QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Print, Qt.KeyboardModifier.NoModifier))
+    assert got == ["print_screen"] and edit.value() == "print_screen"
+
+
+def test_pipette_and_palette_editing(qapp):
+    """Пипетка берёт цвет пикселя скриншота; ПКМ по кружку меняет палитру."""
+    from PySide6.QtGui import QPainter
+
+    o = _overlay(qapp)
+    p = QPainter(o._shot.pixmap)
+    p.fillRect(QRect(200, 200, 50, 50), QColor("#12AB34"))   # логические координаты
+    p.end()
+    _drag(o, (100, 100), (400, 300))
+    changed = []
+    o.palette_changed.connect(changed.append)
+
+    # правый клик по третьему кружку → режим редактирования
+    o._toggle_popup()
+    sw = o.popup._swatches[2]
+    QTest.mouseClick(sw, Qt.MouseButton.RightButton)
+    assert o.popup._edit_index == 2 and o.popup.picker.isVisible()
+
+    # пипетка: клик по зелёному квадрату
+    o.start_picking()
+    assert o._picking and not o.popup.isVisible()
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(220, 220))
+    assert not o._picking
+    assert o._color.name().upper() == "#12AB34"
+    assert changed and changed[-1][2] == "#12AB34"          # кружок палитры заменён
+
+    # HEX-поле
+    o.popup.hex.setText("ff00aa")
+    o.popup._on_hex()
+    assert o._color.name().upper() == "#FF00AA"
+    o.close()
+
+
+def test_palette_is_saved_and_validated(tmp_path, monkeypatch):
+    from kadr import config
+
+    monkeypatch.setattr(config, "config_dir", lambda: tmp_path)
+    store = config.SettingsStore()
+    pal = list(store.data.palette)
+    pal[0] = "#ABCDEF"
+    store.set("palette", pal)
+    store.flush()                                                   # запись отложена — сбрасываем
+    assert config.SettingsStore().data.palette[0] == "#ABCDEF"      # сохранилось на диск
+    broken = config.Settings(palette=["red", "#12345", 5])
+    assert broken.palette == config.DEFAULT_PALETTE                 # мусор → стандартные цвета
+
+
+def test_uninstall_removes_user_data_not_screenshots(tmp_path, monkeypatch, qapp):
+    from kadr import uninstall
+
+    cfg, shots = tmp_path / "cfg", tmp_path / "Pictures"
+    cfg.mkdir()
+    (cfg / "settings.json").write_text("{}")
+    shots.mkdir()
+    (shots / "Kadr_1.png").write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(uninstall, "config_dir", lambda: cfg)
+    monkeypatch.setattr(uninstall.autostart, "set_enabled", lambda on: calls.append(on))
+    monkeypatch.setattr(uninstall, "remove_shortcuts", lambda: calls.append("lnk"))
+    assert uninstall.uninstall() == "manual"      # не frozen → деинсталлятора нет
+    assert not cfg.exists() and (shots / "Kadr_1.png").exists()
+    assert calls == [False, "lnk"]
+
+
+def test_settings_palette_follows_store(qapp, tmp_path, monkeypatch):
+    from kadr import config
+    from kadr.theme import ThemeManager
+    from kadr.ui.settings_window import SettingsWindow
+
+    monkeypatch.setattr(config, "config_dir", lambda: tmp_path)
+    store = config.SettingsStore()
+    w = SettingsWindow(store, ThemeManager("light"))
+    pal = list(store.data.palette)
+    pal[4] = "#010203"
+    store.set("palette", pal)                      # например, изменили в оверлее
+    assert w._pal_buttons[4].color.name().upper() == "#010203"
+    w.close()
+
+
+def test_partial_repaint_leaves_no_stale_pixels(qapp):
+    """Оверлей перерисовывает только изменённые области — на экране не должно оставаться «хвостов»."""
+    import math
+
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp, 400, 300)
+    o._dim_anim.stop()
+    o._dim = 1.0
+    o.update()
+
+    def stale() -> int:
+        qapp.processEvents()
+        shown = qapp.primaryScreen().grabWindow(o.winId()).toImage().convertToFormat(QImage.Format.Format_RGB32)
+        fresh = o.grab().toImage().convertToFormat(QImage.Format.Format_RGB32)
+        skip = [w.geometry() for w in (o.toolbar, o.popup) if w.isVisible()]
+        return sum(shown.pixel(x, y) != fresh.pixel(x, y)
+                   for y in range(0, 300, 3) for x in range(0, 400, 3)
+                   if not any(r.contains(x, y) for r in skip))
+
+    for i in range(10):
+        QTest.mouseMove(o, QPoint(50 + i * 9, 40 + i * 5))
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(60, 50))
+    for i in range(12):
+        QTest.mouseMove(o, QPoint(200 + int(90 * math.sin(i)), 150 + int(60 * math.cos(i))))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 220))
+    assert stale() == 0
+    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE):
+        o.set_tool(tool)
+        QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
+        for i in range(15):
+            QTest.mouseMove(o, QPoint(100 + i * 12, 100 + int(40 * math.sin(i / 2))))
+        QTest.mouseMove(o, QPoint(150, 80))
+        QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(150, 80))
+        assert stale() == 0, tool
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert stale() == 0
+    o.close()

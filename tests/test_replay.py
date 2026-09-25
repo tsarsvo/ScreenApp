@@ -115,3 +115,79 @@ def test_segments_concat_into_mp4(tmp_path):
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
                             str(out)], capture_output=True, text=True)
     assert abs(float(probe.stdout) - 12) < 1.0
+
+
+def test_restart_is_nonblocking_and_leaves_no_orphans(monkeypatch, tmp_path):
+    """start()/stop() возвращаются сразу; быстрая смена настроек не плодит процессы FFmpeg."""
+    import threading
+
+    r = rec.ReplayRecorder()
+    r.dir = tmp_path
+    launched, killed = [], []
+
+    class FakeProc:
+        stdin = None
+
+        def __init__(self):
+            self.alive = True
+            launched.append(self)
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def terminate(self):
+            self.alive = False
+            killed.append(self)
+
+        kill = terminate
+
+        def wait(self, timeout=None):
+            return 0
+
+    def slow_probe(*_a, **_k):
+        time.sleep(0.3)                       # «долгая» проверка кодеров
+        return ("libx264",), False
+
+    monkeypatch.setattr(rec.ff, "find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(rec.ff, "probe", slow_probe)
+    monkeypatch.setattr(rec, "popen_tied", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(rec, "STARTUP_CHECK_S", 0.1)
+    monkeypatch.setattr(r, "_audio_inputs", lambda exe, opts: ([], None))
+
+    t = time.perf_counter()
+    for m in (1, 2, 3, 4, 5):                 # пользователь быстро щёлкает длительность
+        r.start(_opts(minutes=m))
+    assert time.perf_counter() - t < 0.1      # интерфейс не ждал
+    deadline = time.time() + 5
+    while not r.running and time.time() < deadline:
+        time.sleep(0.05)
+    assert r.running and r._opts.minutes == 5
+    alive = [p for p in launched if p.alive]
+    assert len(alive) == 1                    # ровно один живой FFmpeg
+    r.stop(wait=True)
+    assert not [p for p in launched if p.alive] and not r.running
+    assert threading.active_count() < 20
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="на macOS повтор экрана не поддерживается")
+def test_ffmpeg_child_dies_with_kadr(tmp_path):
+    """Если Kadr убит принудительно, дочерний процесс (FFmpeg) не должен остаться «сиротой».
+    Ребёнок пишет «пульс» в файл; после убийства родителя пульс должен прекратиться."""
+    beat = tmp_path / "beat.txt"
+    child = (f"import time, pathlib\np = pathlib.Path({str(beat)!r})\n"
+             "for i in range(600):\n    p.write_text(str(i)); time.sleep(0.1)\n")
+    parent = (f"import sys, time; sys.path.insert(0, {str(ROOT)!r})\n"
+              "from kadr.replay.child import popen_tied\n"
+              f"popen_tied([sys.executable, '-c', {child!r}])\n"
+              "time.sleep(60)\n")
+    proc = subprocess.Popen([sys.executable, "-c", parent])
+    deadline = time.time() + 20
+    while not beat.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert beat.exists(), "дочерний процесс не запустился"
+    proc.kill()                        # как «Снять задачу» в Диспетчере задач
+    proc.wait()
+    time.sleep(1.0)
+    before = beat.read_text()
+    time.sleep(1.0)
+    assert beat.read_text() == before, "дочерний процесс пережил родителя"

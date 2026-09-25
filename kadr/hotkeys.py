@@ -37,9 +37,6 @@ _SPECIAL: dict[str, tuple[int, int, str]] = {
 for _n in range(1, 25):
     _SPECIAL[f"f{_n}"] = (int(Qt.Key.Key_F1) + _n - 1, 0x70 + _n - 1, f"F{_n}")
 
-# Клавиши, которые можно назначить без модификатора
-_STANDALONE = {"print_screen", "pause", "scroll_lock", *(f"f{n}" for n in range(1, 25))}
-
 # macOS virtual key codes (kVK_ANSI_*) — чтобы сочетание работало при любой раскладке
 _MAC_VK = {
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11,
@@ -141,8 +138,6 @@ def hotkey_from_event(event: QKeyEvent) -> "Hotkey | None | str":
             key = _MAC_VK_REV[vk]
     if key is None:
         return "Эту клавишу нельзя назначить"
-    if not mods and key not in _STANDALONE:
-        return "Добавьте Ctrl, Alt, Shift или Win/Cmd"
     return Hotkey(frozenset(mods), key)
 
 

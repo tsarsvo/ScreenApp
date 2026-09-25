@@ -4,19 +4,21 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFileDialog, QMessageBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, __version__, autostart, icons
-from ..config import SettingsStore
+from .. import APP_NAME, __version__, autostart, icons, uninstall
+from ..config import DEFAULT_PALETTE, SettingsStore
+from ..hotkeys import Hotkey
 from ..theme import ThemeManager, settings_stylesheet
-from .widgets import HotkeyEdit, Segmented, ToggleSwitch
+from .widgets import ColorDot, HotkeyEdit, Segmented, ToggleSwitch
 
 
 class SettingsWindow(QWidget):
     hotkey_recording = Signal(bool)   # приложение отключает глобальные хоткеи на время записи
     _mics_loaded = Signal(list)        # из фонового потока → GUI
+    uninstall_done = Signal()          # приложение должно завершиться
 
     def __init__(self, store: SettingsStore, theme: ThemeManager, replay=None) -> None:
         super().__init__(None, Qt.WindowType.Window)
@@ -130,6 +132,27 @@ class SettingsWindow(QWidget):
         # --- Повтор экрана
         self._build_replay_card(root, s)
 
+        # --- Рисование: палитра цветов по умолчанию
+        card = self._card("РИСОВАНИЕ", root)
+        pal_row = QHBoxLayout()
+        pal_row.setSpacing(6)
+        pal_row.setSpacing(2)
+        self._pal_buttons: list[ColorDot] = []
+        for i in range(len(DEFAULT_PALETTE)):
+            b = ColorDot()
+            b.setToolTip("Изменить цвет")
+            b.clicked.connect(lambda _=False, k=i: self._edit_palette_color(k))
+            self._pal_buttons.append(b)
+            pal_row.addWidget(b)
+        reset = QPushButton("Сбросить")
+        reset.setObjectName("Link")
+        reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        reset.clicked.connect(lambda: self.store.set("palette", list(DEFAULT_PALETTE)))
+        self._row(card, "Палитра", reset, "Нажмите на кружок, чтобы выбрать любой цвет")
+        pal_row.addStretch(1)
+        card.addLayout(pal_row)
+        self._refresh_palette()
+
         # --- Поведение
         card = self._card("ПОВЕДЕНИЕ", root)
         self._row(card, "Показывать курсор на скриншоте", self._toggle("show_cursor"))
@@ -165,6 +188,23 @@ class SettingsWindow(QWidget):
         foot.addStretch(1)
         foot.addWidget(hint)
         root.addLayout(foot)
+
+        # --- Удаление (в самом низу)
+        root.addSpacing(10)
+        line = QFrame()
+        line.setObjectName("Divider")
+        root.addWidget(line)
+        danger = QHBoxLayout()
+        danger_text = QLabel("Удалить Kadr с компьютера вместе с настройками.\nСкриншоты и записи останутся.")
+        danger_text.setObjectName("Muted")
+        danger_text.setStyleSheet("font-size: 11px;")
+        self.uninstall_btn = QPushButton("  Удалить Kadr…")
+        self.uninstall_btn.setObjectName("Danger")
+        self.uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.uninstall_btn.clicked.connect(self._confirm_uninstall)
+        danger.addWidget(danger_text, 1)
+        danger.addWidget(self.uninstall_btn)
+        root.addLayout(danger)
 
         self._mics_loaded.connect(self._fill_microphones)
         self.theme.changed.connect(self.apply_theme)
@@ -308,6 +348,8 @@ class SettingsWindow(QWidget):
         self.store.set("replay_mic_device", self.mic_box.currentData() or "")
 
     def _on_store_changed(self, name: str) -> None:
+        if name == "palette":
+            self._refresh_palette()
         # Настройку могли поменять из меню трея — синхронизируем тумблеры
         for t in self._toggles:
             if t.property("field") == name and t.isChecked() != getattr(self.store.data, name):
@@ -317,8 +359,8 @@ class SettingsWindow(QWidget):
 
     def _update_replay_ui(self) -> None:
         d = self.store.data
-        self.replay_opts.setEnabled(d.replay_enabled)
-        self.mic_row.setEnabled(d.replay_enabled and d.replay_mic)
+        # Параметры можно менять и при выключенной записи — они применятся при включении
+        self.mic_row.setVisible(d.replay_mic)
         if not d.replay_enabled:
             text = "Выключено"
         elif self.replay is not None and self.replay.running:
@@ -332,6 +374,7 @@ class SettingsWindow(QWidget):
     # ---------------------------------------------------------------- actions
     def apply_theme(self) -> None:
         t = self.theme.tokens
+        self.uninstall_btn.setIcon(icons.icon("trash", t.danger))
         self.setStyleSheet(settings_stylesheet(t, icons.check_mark_file(t.accent_text)))
         for tg in self._toggles:
             tg.apply_theme(t)
@@ -346,8 +389,14 @@ class SettingsWindow(QWidget):
             self.show_hotkey_error("Это сочетание уже используется для другого действия")
             self._hotkey_edits[field].set_value(getattr(self.store.data, field))
             return
-        self.show_hotkey_error("")
         self.store.set(field, value)
+        hk = Hotkey.parse(value)
+        if hk and not hk.mods and len(hk.key) == 1:
+            # Свободный выбор разрешён, но одиночная буква/цифра перестанет печататься в других программах
+            self.show_hotkey_error(f"Внимание: клавиша «{hk.label()}» будет перехватываться во всех программах "
+                                   "и перестанет печататься. Если это не нужно — добавьте Ctrl или Alt.")
+        else:
+            self.show_hotkey_error("")
 
     def _choose_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Папка для скриншотов", self.store.data.save_dir)
@@ -365,7 +414,7 @@ class SettingsWindow(QWidget):
         self._update_quality_enabled()
 
     def _update_quality_enabled(self) -> None:
-        self.quality_row.setEnabled(self.store.data.image_format in ("jpg", "webp"))
+        self.quality_row.setVisible(self.store.data.image_format in ("jpg", "webp"))
 
     def _set_autostart(self, enabled: bool) -> None:
         try:
@@ -378,6 +427,49 @@ class SettingsWindow(QWidget):
             self.autostart.blockSignals(False)
             self.autostart_error.setText(f"Не удалось изменить автозапуск: {exc}")
             self.autostart_error.show()
+
+    # ----------------------------------------------------------------- palette
+    def _refresh_palette(self) -> None:
+        for b, color in zip(self._pal_buttons, self.store.data.palette):
+            b.ring = QColor(self.theme.tokens.accent)
+            b.set_color(color)
+
+    def _edit_palette_color(self, i: int) -> None:
+        """Выбор любого цвета; в диалоге Qt есть своя пипетка («Pick Screen Color»)."""
+        dlg = QColorDialog(QColor(self.store.data.palette[i]), self)
+        dlg.setWindowTitle("Цвет палитры")
+        dlg.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        if dlg.exec():
+            pal = list(self.store.data.palette)
+            pal[i] = dlg.selectedColor().name().upper()
+            self.store.set("palette", pal)
+
+    # --------------------------------------------------------------- uninstall
+    def _confirm_uninstall(self) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Удаление Kadr")
+        box.setText("Удалить Kadr с этого компьютера?")
+        box.setInformativeText("Будут удалены программа, ярлыки, настройки и автозапуск.\n"
+                               "Ваши скриншоты и записи повтора останутся в папке сохранения.")
+        yes = box.addButton("Удалить", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(box.buttons()[-1])
+        box.exec()
+        if box.clickedButton() is not yes:
+            return
+        if self.replay is not None:
+            self.replay.stop(wait=True)
+        self.store.disable_saving()
+        mode = uninstall.uninstall()
+        if mode == "manual":
+            folder = uninstall.app_dir()
+            QMessageBox.information(
+                self, "Kadr удалён",
+                "Настройки, автозапуск и ярлыки удалены.\n\n"
+                f"Осталось удалить папку программы вручную:\n{folder}")
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        self.uninstall_done.emit()
 
     def present(self) -> None:
         self.show()

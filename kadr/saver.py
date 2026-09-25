@@ -13,14 +13,18 @@ from .config import Settings
 _EXT = {"png": "png", "jpg": "jpg", "webp": "webp"}
 
 
-def unique_path(folder: Path, ext: str) -> Path:
+def unique_path(folder: Path, ext: str, prefix: str = APP_NAME) -> Path:
+    """Свободное имя файла. Файл сразу создаётся (эксклюзивно), поэтому два сохранения,
+    идущие параллельно в фоне, никогда не получат одно и то же имя."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    path = folder / f"{APP_NAME}_{stamp}.{ext}"
-    n = 2
-    while path.exists():
-        path = folder / f"{APP_NAME}_{stamp}_{n}.{ext}"
-        n += 1
-    return path
+    n = 1
+    while True:
+        path = folder / (f"{prefix}_{stamp}.{ext}" if n == 1 else f"{prefix}_{stamp}_{n}.{ext}")
+        try:
+            with open(path, "xb"):
+                return path
+        except FileExistsError:
+            n += 1
 
 
 def save_image(image: QImage, settings: Settings) -> Path:
@@ -30,14 +34,19 @@ def save_image(image: QImage, settings: Settings) -> Path:
     fmt = settings.image_format
     path = unique_path(folder, _EXT[fmt])
 
-    if fmt == "png":
-        ok = image.save(str(path), "PNG")
-    elif fmt == "jpg":
-        # JPEG не поддерживает прозрачность — сводим к RGB
-        ok = image.convertToFormat(QImage.Format.Format_RGB888).save(str(path), "JPG", settings.quality)
-    else:
-        ok = _save_webp(image, path, settings.quality)
+    try:
+        if fmt == "png":
+            ok = image.save(str(path), "PNG")
+        elif fmt == "jpg":
+            # JPEG не поддерживает прозрачность — сводим к RGB
+            ok = image.convertToFormat(QImage.Format.Format_RGB888).save(str(path), "JPG", settings.quality)
+        else:
+            ok = _save_webp(image, path, settings.quality)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     if not ok:
+        path.unlink(missing_ok=True)  # не оставляем пустой зарезервированный файл
         raise OSError(f"Не удалось записать файл {path}")
     return path
 

@@ -1,6 +1,7 @@
 """Поиск вложенного FFmpeg, выбор видеокодера и список микрофонов."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -54,6 +55,37 @@ def encoder_args(encoder: str, bitrate_k: int, fps: int, seg: int) -> list[str]:
         "mpeg4": ["-q:v", "5"],
     }
     return ["-c:v", encoder, *per.get(encoder, []), *common]
+
+
+def probe(ffmpeg: str, cache_dir: Path | None = None, refresh: bool = False) -> tuple[tuple[str, ...], bool]:
+    """(рабочие кодеры, есть ли ddagrab). Проверка кодеров — это 4–5 пробных запусков
+    FFmpeg (несколько секунд), поэтому результат кэшируется на диске и
+    пересчитывается только при смене файла FFmpeg или если кэшированный кодер отказал."""
+    try:
+        st = Path(ffmpeg).stat()
+        key = f"{Path(ffmpeg).resolve()}|{st.st_size}|{int(st.st_mtime)}|{sys.platform}"
+    except OSError:
+        key = ""
+    cache = cache_dir / "ffmpeg-probe.json" if cache_dir else None
+    if cache and key and not refresh:
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if data.get("key") == key:
+                return tuple(data["encoders"]), bool(data["ddagrab"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if refresh:
+        working_encoders.cache_clear()
+    encoders = working_encoders(ffmpeg)
+    dda = has_filter(ffmpeg, "ddagrab") if sys.platform == "win32" else False
+    if cache and key:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"key": key, "encoders": list(encoders), "ddagrab": dda}),
+                             encoding="utf-8")
+        except OSError:
+            pass
+    return encoders, dda
 
 
 @lru_cache(maxsize=4)

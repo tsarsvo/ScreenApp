@@ -104,6 +104,7 @@ def settings_stylesheet(t: Tokens, check_icon: str) -> str:
     QPushButton:hover {{ background: {t.hover}; }}
     QPushButton:pressed {{ background: {t.border}; }}
     QPushButton:disabled {{ color: {t.muted}; }}
+    QComboBox:disabled, QLineEdit:disabled {{ color: {t.muted}; }}
     QPushButton#Segment {{ border-radius: 0; padding: 5px 14px; border-left-width: 0; }}
     QPushButton#Segment[first="true"] {{ border-top-left-radius: 8px; border-bottom-left-radius: 8px;
                                           border-left-width: 1px; }}
@@ -111,7 +112,10 @@ def settings_stylesheet(t: Tokens, check_icon: str) -> str:
     QPushButton#Segment:checked {{ background: {t.accent}; color: {t.accent_text}; border-color: {t.accent}; }}
     QPushButton#Hotkey {{ min-width: 150px; font-weight: 500; }}
     QPushButton#Hotkey[recording="true"] {{ border: 1px solid {t.accent}; color: {t.accent}; }}
-    QPushButton#Link {{ background: transparent; border: none; color: {t.accent}; padding: 4px 6px; }}
+    QPushButton#Danger {{ color: {t.danger}; background: transparent; border: 1px solid {t.danger};
+                          padding: 6px 14px; }}
+    QPushButton#Danger:hover {{ background: {t.danger}; color: #FFFFFF; }}
+        QPushButton#Link {{ background: transparent; border: none; color: {t.accent}; padding: 4px 6px; }}
     QPushButton#Link:hover {{ text-decoration: underline; }}
 
     QLineEdit {{
