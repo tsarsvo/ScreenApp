@@ -261,7 +261,7 @@ class KadrApp(QObject):
         if self.settings_window is None:
             from .ui.settings_window import SettingsWindow
 
-            self.settings_window = SettingsWindow(self.store, self.theme, self.replay)
+            self.settings_window = SettingsWindow(self.store, self.theme, self.replay, self.updater)
             self.settings_window.hotkey_recording.connect(self._on_hotkey_recording)
             self.settings_window.uninstall_done.connect(self.qapp.quit)
             self.settings_window.show_hotkey_error(

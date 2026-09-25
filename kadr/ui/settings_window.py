@@ -20,11 +20,12 @@ class SettingsWindow(QWidget):
     _mics_loaded = Signal(list)        # из фонового потока → GUI
     uninstall_done = Signal()          # приложение должно завершиться
 
-    def __init__(self, store: SettingsStore, theme: ThemeManager, replay=None) -> None:
+    def __init__(self, store: SettingsStore, theme: ThemeManager, replay=None, updater=None) -> None:
         super().__init__(None, Qt.WindowType.Window)
         self.store = store
         self.theme = theme
         self.replay = replay
+        self.updater = updater
         s = store.data
 
         self.setObjectName("Root")
@@ -160,6 +161,7 @@ class SettingsWindow(QWidget):
         self._row(card, "Уведомление после сохранения", self._toggle("notify_on_save"))
         self._divider(card)
         self._row(card, "Проверять обновления", self._toggle("check_updates"), "Раз в сутки, через GitHub")
+        self._build_update_row(card)
         self._divider(card)
         self._row(card, "История скриншотов", self._toggle("history_enabled"),
                   "Последние 12 снимков в меню значка → «Недавние»")
@@ -432,6 +434,56 @@ class SettingsWindow(QWidget):
             self.autostart.blockSignals(False)
             self.autostart_error.setText(f"Не удалось изменить автозапуск: {exc}")
             self.autostart_error.show()
+
+    # ----------------------------------------------------------------- updates
+    def _build_update_row(self, card) -> None:
+        self._divider(card)
+        self.update_btn = QPushButton("Проверить обновления")
+        self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_btn.clicked.connect(self._on_update_clicked)
+        self.update_status = QLabel("")
+        self.update_status.setObjectName("Muted")
+        self.update_status.setStyleSheet("font-size: 11px;")
+        w = self._row(card, f"Версия {__version__}", self.update_btn)
+        card.addWidget(self.update_status)
+        self.update_status.hide()
+        if self.updater is None:
+            w.setVisible(False)
+            return
+        self.updater.available.connect(self._on_update_available)
+        self.updater.up_to_date.connect(lambda: self._set_update_status("Установлена последняя версия ✓"))
+        self.updater.failed.connect(lambda e: (self._set_update_status(e, error=True),
+                                               self.update_btn.setEnabled(True)))
+        self.updater.downloading.connect(lambda: self._set_update_status("Скачиваю и проверяю обновление…"))
+        if self.updater.latest is not None:      # новую версию уже нашла фоновая проверка
+            self._on_update_available(self.updater.latest)
+
+    def _set_update_status(self, text: str, error: bool = False) -> None:
+        self.update_status.setObjectName("Error" if error else "Muted")
+        self.update_status.setText(text)
+        self.update_status.setVisible(bool(text))
+        self.update_status.style().unpolish(self.update_status)
+        self.update_status.style().polish(self.update_status)
+        self.update_btn.setEnabled(True)
+
+    def _on_update_clicked(self) -> None:
+        if self.updater is None:
+            return
+        if self.updater.latest is not None:
+            self.update_btn.setEnabled(False)
+            self.updater.install()
+        else:
+            self.update_btn.setEnabled(False)
+            self._set_update_status("Проверяю…")
+            self.update_btn.setEnabled(False)
+            self.updater.check(manual=True)
+
+    def _on_update_available(self, release) -> None:
+        self.update_btn.setText(f"Обновить до v{release.version}")
+        self.update_btn.setObjectName("Primary")
+        self.update_btn.style().unpolish(self.update_btn)
+        self.update_btn.style().polish(self.update_btn)
+        self._set_update_status(f"Вышла версия {release.version} — нажмите, чтобы установить")
 
     # ----------------------------------------------------------------- palette
     def _refresh_palette(self) -> None:

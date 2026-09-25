@@ -84,3 +84,35 @@ def test_install_verifies_sha256(app, monkeypatch, tmp_path, tampered):
     else:
         assert quit_ and launched and "/SILENT" in launched[0]
         assert Path(launched[0][0]).read_bytes() == payload
+
+
+def test_settings_check_updates_button(monkeypatch, tmp_path):
+    """Кнопка «Проверить обновления» в настройках: проверка → статус → «Обновить до vX» → установка."""
+    from PySide6.QtWidgets import QApplication
+
+    from kadr import config
+    from kadr.theme import ThemeManager
+    from kadr.ui.settings_window import SettingsWindow
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    monkeypatch.setattr(config, "config_dir", lambda: tmp_path)
+    u = updater.Updater()
+    calls = []
+    monkeypatch.setattr(u, "check", lambda manual=False: calls.append(("check", manual)))
+    monkeypatch.setattr(u, "install", lambda: calls.append(("install",)))
+    w = SettingsWindow(config.SettingsStore(), ThemeManager("light"), updater=u)
+
+    assert w.update_btn.text() == "Проверить обновления"
+    w.update_btn.click()
+    assert calls == [("check", True)] and "Проверяю" in w.update_status.text()
+
+    u.up_to_date.emit()
+    assert "последняя версия" in w.update_status.text() and w.update_btn.isEnabled()
+
+    rel = updater.parse_release(_release_json(tag="v9.9.9"))
+    u.latest = rel
+    u.available.emit(rel)
+    assert w.update_btn.text() == "Обновить до v9.9.9"
+    w.update_btn.click()
+    assert calls[-1] == ("install",)
+    w.close()

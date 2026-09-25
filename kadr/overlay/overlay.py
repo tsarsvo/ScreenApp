@@ -15,7 +15,7 @@ import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence,
-                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QWheelEvent)
+                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
 from ..capture import ScreenShot
@@ -543,16 +543,13 @@ class Overlay(QWidget):
         # ручки, рамка и «таблетка» с размером над левым верхним углом
         return r.adjusted(-HANDLE_HIT - 2, -34, 160, HANDLE_HIT + 2)
 
-    def _update_shape_area(self, before: QRectF) -> None:
-        cur = self._current
-        if type(cur) is PenStroke and len(cur.points) >= 2:
-            # штрих растёт с конца — достаточно перерисовать последние сегменты
-            tail = cur.points[-4:]
-            m = cur.width + 2
-            area = QRectF(QPolygonF(tail).boundingRect()).adjusted(-m, -m, m, m)
-        else:
-            area = before.united(cur.bounds())
-        self.update(area.toAlignedRect())
+    def _update_shape_area(self, _before: QRectF) -> None:
+        # Во время рисования перерисовываем всё выделение целиком (фигуры живут только
+        # в нём). Раньше перерисовывался лишь «хвост» штриха или рамка фигуры — это быстрее,
+        # но на некоторых экранах (дробный масштаб Windows, драйверы) по краям таких
+        # кусочков оставалась «рябь», пропадавшая только после отпускания кнопки.
+        # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая.
+        self.update(self._selection_area(self._sel))
 
     def _update_hover(self, old: QPoint) -> None:
         """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
@@ -598,6 +595,7 @@ class Overlay(QWidget):
             self._caret_timer.start()
             return
         self._mode = "drawing"
+        self.update(self._selection_area(self._sel))   # ручки выделения прячутся на время рисования
         if self._tool == Tool.PEN:
             self._current = PenStroke(c, w, points=[pos])
         elif self._tool == Tool.MARKER:
@@ -721,12 +719,16 @@ class Overlay(QWidget):
 
     # ---------------------------------------------------------------- paint
     def paintEvent(self, event) -> None:
-        exposed = event.rect()             # рисуем только то, что реально изменилось
-        dpr = self._shot.dpr
+        # Qt уже ограничил отрисовку изменённой областью (event.region), выровненной по
+        # физическим пикселям. Фон и слой фигур рисуем ЦЕЛИКОМ от (0,0) и даём обрезке
+        # сделать своё: так каждый пиксель области перезаписывается полностью.
+        # Раньше рисовался только кусок с дробными координатами источника — при масштабе
+        # экрана 125% пиксели на границах куска накладывались на старые, и во время
+        # рисования появлялась «рябь», исчезавшая лишь после полной перерисовки.
+        exposed = event.rect()
         p = QPainter(self)
-        p.drawPixmap(QRectF(exposed), self._shot.pixmap,
-                     QRectF(exposed.x() * dpr, exposed.y() * dpr, exposed.width() * dpr, exposed.height() * dpr))
-        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        p.setClipRegion(event.region())
+        p.drawPixmap(0, 0, self._shot.pixmap)
 
         # Затемнение вокруг выделения (с анимацией появления): 4 прямоугольника
         # вместо вычитания контуров — в разы быстрее на больших экранах
@@ -738,9 +740,10 @@ class Overlay(QWidget):
                       QRect(0, s.top(), s.left(), s.height()),
                       QRect(s.right() + 1, s.top(), w - s.right() - 1, s.height())):
                 if r.intersects(exposed):
-                    p.fillRect(r.intersected(exposed), dim)
+                    p.fillRect(r, dim)
         else:
-            p.fillRect(exposed, dim)
+            p.fillRect(self.rect(), dim)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
 
         if not self._sel:
             self._paint_guides(p)
@@ -750,11 +753,8 @@ class Overlay(QWidget):
         # Фигуры обрезаются по границе выделения — ровно так, как попадут в файл
         p.save()
         p.setClipRect(self._sel)
-        if self._history.shapes:
-            area = QRectF(self._sel.intersected(exposed))
-            if not area.isEmpty():
-                p.drawPixmap(area, self._ensure_layer(),
-                             QRectF(area.x() * dpr, area.y() * dpr, area.width() * dpr, area.height() * dpr))
+        if self._history.shapes and self._sel.intersects(exposed):
+            p.drawPixmap(0, 0, self._ensure_layer())
         if self._current:
             self._current.paint(p)
         if self._editing:

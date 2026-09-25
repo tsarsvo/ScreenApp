@@ -112,7 +112,10 @@ def settings_stylesheet(t: Tokens, check_icon: str) -> str:
     QPushButton#Segment:checked {{ background: {t.accent}; color: {t.accent_text}; border-color: {t.accent}; }}
     QPushButton#Hotkey {{ min-width: 150px; font-weight: 500; }}
     QPushButton#Hotkey[recording="true"] {{ border: 1px solid {t.accent}; color: {t.accent}; }}
-    QPushButton#Danger {{ color: {t.danger}; background: transparent; border: 1px solid {t.danger};
+    QPushButton#Primary {{ background: {t.accent}; color: {t.accent_text}; border-color: {t.accent};
+                           font-weight: 600; }}
+    QPushButton#Primary:hover {{ background: {t.accent}; border-color: {t.text}; }}
+        QPushButton#Danger {{ color: {t.danger}; background: transparent; border: 1px solid {t.danger};
                           padding: 6px 14px; }}
     QPushButton#Danger:hover {{ background: {t.danger}; color: #FFFFFF; }}
         QPushButton#Link {{ background: transparent; border: none; color: {t.accent}; padding: 4px 6px; }}
