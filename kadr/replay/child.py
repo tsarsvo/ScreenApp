@@ -66,15 +66,41 @@ def _linux_die_with_parent() -> None:
     libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
 
 
+CREATE_SUSPENDED = 0x00000004
+
+
 def popen_tied(cmd: list[str], **kwargs) -> subprocess.Popen:
     """subprocess.Popen, но ребёнок не переживёт родителя."""
     if sys.platform.startswith("linux"):
         kwargs.setdefault("preexec_fn", _linux_die_with_parent)
+        return subprocess.Popen(cmd, **kwargs)
+    if sys.platform != "win32":
+        return subprocess.Popen(cmd, **kwargs)
+
+    try:
+        kernel32, job = _windows_job()  # создаём заранее — до запуска ребёнка
+    except OSError:
+        return subprocess.Popen(cmd, **kwargs)  # не критично: обычный выход и так останавливает запись
+    # Ребёнок стартует приостановленным: он попадает в задание раньше, чем выполнит
+    # хоть одну инструкцию. Иначе, если Kadr убить в первые миллисекунды после запуска,
+    # FFmpeg успел бы начать работу без привязки и остался бы «сиротой».
+    kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_SUSPENDED
     proc = subprocess.Popen(cmd, **kwargs)
-    if sys.platform == "win32":
-        try:
-            kernel32, job = _windows_job()
-            kernel32.AssignProcessToJobObject(job, int(proc._handle))
-        except OSError:
-            pass  # не критично: при обычном выходе запись всё равно останавливается
+    try:
+        if not kernel32.AssignProcessToJobObject(job, int(proc._handle)):
+            import ctypes
+
+            print(f"kadr: AssignProcessToJobObject failed, error {ctypes.get_last_error()}", file=sys.stderr)
+    finally:
+        _resume(int(proc._handle))
     return proc
+
+
+def _resume(handle: int) -> None:
+    """Возобновить приостановленный процесс (subprocess не отдаёт дескриптор его потока)."""
+    import ctypes
+    from ctypes import wintypes
+
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess(handle)
