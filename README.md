@@ -148,7 +148,7 @@ python main.py            # --region | --full | --settings | --save-replay
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> назад | <kbd>Ctrl</kbd>+<kbd>Y</kbd> вперёд | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Enter</kbd> копировать | <kbd>Ctrl</kbd>+<kbd>S</kbd> сохранить |
 | <kbd>I</kbd> пипетка | ПКМ по кружку — свой цвет | | |
 
-<kbd>Esc</kbd> или правая кнопка мыши закрывают выделение. Простой клик без протяжки выделяет весь экран, двойной клик по выделению копирует его. На macOS вместо <kbd>Ctrl</kbd> используется <kbd>Cmd</kbd>.
+<kbd>Esc</kbd> или правая кнопка мыши закрывают выделение. <kbd>Ctrl</kbd>+<kbd>A</kbd> выделяет весь экран, двойной клик по выделению копирует его. На macOS вместо <kbd>Ctrl</kbd> используется <kbd>Cmd</kbd>.
 
 <details>
 <summary><b>Если что-то не работает</b></summary>

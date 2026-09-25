@@ -128,7 +128,9 @@ def test_overlay_select_draw_export(qapp):
 def test_overlay_move_resize_and_click_fullscreen(qapp):
     o = _overlay(qapp)
     QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(50, 50))
-    assert o._sel == o.rect()                          # клик без протяжки — весь экран
+    assert o._sel is None and not o.toolbar.isVisible()   # клик без протяжки ничего не выделяет
+    QTest.keyClick(o, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert o._sel == o.rect()                             # Ctrl+A — весь экран
     o.reset_selection()
     _drag(o, (100, 100), (300, 250))
     _drag(o, (200, 200), (250, 220))                   # перемещение (инструмент «Выделение»)
@@ -282,4 +284,42 @@ def test_partial_repaint_leaves_no_stale_pixels(qapp):
         assert stale() == 0, tool
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert stale() == 0
+    o.close()
+
+
+def test_rapid_clicks_do_not_select_screen_or_copy(qapp):
+    """Баг: резкий повторный клик выделял весь экран, панель уезжала в угол, а двойной клик
+    копировал весь экран и закрывал оверлей. Воспроизводим точную последовательность Windows:
+    нажатие, отпускание, двойной клик, отпускание."""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    o = _overlay(qapp)
+    copied = []
+    o.copy_requested.connect(copied.append)
+
+    def send(kind, x, y):
+        p = QPointF(x, y)
+        buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+        qapp.sendEvent(o, QMouseEvent(kind, p, o.mapToGlobal(p), Qt.MouseButton.LeftButton, buttons,
+                                      Qt.KeyboardModifier.NoModifier))
+
+    for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                 QEvent.Type.MouseButtonDblClick, QEvent.Type.MouseButtonRelease):
+        send(kind, 300, 200)
+    assert o._sel is None and not o.toolbar.isVisible() and not copied
+
+    # второй резкий клик сразу переходит в протяжку — это должно стать обычным выделением
+    send(QEvent.Type.MouseButtonPress, 100, 100)
+    send(QEvent.Type.MouseButtonRelease, 100, 100)
+    send(QEvent.Type.MouseButtonDblClick, 100, 100)
+    QTest.mouseMove(o, QPoint(260, 220))
+    send(QEvent.Type.MouseButtonRelease, 260, 220)
+    assert o._sel == QRect(QPoint(100, 100), QPoint(260, 220)) and not copied
+
+    # а двойной клик внутри готового выделения по-прежнему копирует
+    send(QEvent.Type.MouseButtonPress, 180, 160)
+    send(QEvent.Type.MouseButtonRelease, 180, 160)
+    send(QEvent.Type.MouseButtonDblClick, 180, 160)
+    assert copied
     o.close()

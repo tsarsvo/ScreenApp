@@ -30,6 +30,7 @@ DIM_ALPHA = 115          # непрозрачность затемнения (и
 HANDLE_R = 4.0           # радиус «ручки» изменения размера
 HANDLE_HIT = 9           # зона попадания по ручке
 GAP = 8                  # отступ панели от выделения
+MIN_SELECTION = 4        # меньше — считаем кликом, а не выделением
 
 # Ручки: (id, доля по x, доля по y)
 _HANDLES = [("tl", 0, 0), ("t", .5, 0), ("tr", 1, 0), ("r", 1, .5),
@@ -190,6 +191,16 @@ class Overlay(QWidget):
         self._mode = "idle"
         self.toolbar.hide()
         self.popup.hide()
+        self.update()
+
+    def select_all(self) -> None:
+        """Ctrl+A — выделить весь экран."""
+        self._commit_text()
+        if not self._sel:
+            self.selection_started.emit(self)
+        self._sel = QRect(self.rect())
+        self._mode = "idle"
+        self._place_toolbar()
         self.update()
 
     def render_selection(self) -> QImage:
@@ -430,8 +441,13 @@ class Overlay(QWidget):
             return
         mode, self._mode = self._mode, "idle"
         if mode == "selecting":
-            if self._sel.width() < 3 or self._sel.height() < 3:
-                self._sel = QRect(self.rect())  # простой клик — весь экран
+            if self._sel.width() < MIN_SELECTION or self._sel.height() < MIN_SELECTION:
+                # Клик без протяжки (или случайное «дрожание» мыши) ничего не выделяет —
+                # раньше он выделял весь экран, и при быстрых кликах панель «уезжала» в угол
+                old = QRect(self._sel)
+                self._sel = None
+                self.update(self._selection_area(old))
+                return
             self._place_toolbar()
         elif mode in ("moving", "resizing"):
             if self._sel.width() < 3 or self._sel.height() < 3:
@@ -449,9 +465,15 @@ class Overlay(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
-        # Двойной клик внутри выделения в режиме «Выделение» — сразу скопировать
-        if self._tool == Tool.SELECT and self._sel and self._sel.contains(e.position().toPoint()):
+        # Двойной клик внутри уже готового выделения в режиме «Выделение» — скопировать.
+        # Во всех остальных случаях (например, два резких клика по пустому месту) второй
+        # клик — это обычное нажатие: Qt присылает его как DoubleClick вместо Press.
+        pos = e.position().toPoint()
+        if (e.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT and self._sel
+                and self._sel.contains(pos) and self._hit_handle(pos) is None and not self._picking):
             self._copy()
+            return
+        self.mousePressEvent(e)
 
     def wheelEvent(self, e: QWheelEvent) -> None:
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -635,6 +657,8 @@ class Overlay(QWidget):
             self._copy()
         elif ctrl and _is_key(e, Qt.Key.Key_S):
             self._save()
+        elif ctrl and _is_key(e, Qt.Key.Key_A):
+            self.select_all()
         elif self._sel and not ctrl and _is_key(e, Qt.Key.Key_I):
             self.start_picking()
         elif self._sel and not ctrl:
@@ -749,7 +773,7 @@ class Overlay(QWidget):
         self._pill(p, QRectF(x, y, w, 20), text, f)
 
     def _paint_hint(self, p: QPainter) -> None:
-        text = "Выделите область  ·  клик — весь экран  ·  Esc — отмена"
+        text = "Выделите область  ·  Ctrl+A — весь экран  ·  Esc — отмена"
         f = self._fonts.hint
         w = self._fonts.hint_metrics.horizontalAdvance(text) + 28
         p.setOpacity(self._dim)
