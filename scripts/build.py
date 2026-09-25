@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+
+# Консоль Windows / CI часто в cp1252 — без этого print() с кириллицей падает
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from PIL import Image  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 

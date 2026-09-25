@@ -22,6 +22,12 @@ RELEASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
 DEST = Path(__file__).resolve().parent.parent / "kadr" / "bin"
 
 
+# Консоль Windows / CI часто в cp1252 — без этого print() с кириллицей падает
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "kadr-build"})
     with urllib.request.urlopen(req, timeout=300) as r:
