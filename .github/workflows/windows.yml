@@ -62,6 +62,9 @@ jobs:
       - name: Сборка
         run: python scripts/build.py
 
+      - name: Сквозная проверка Kadr.exe на Windows
+        run: python scripts/smoke_exe.py dist/Kadr/Kadr.exe
+
       - name: Проверка сборки
         shell: pwsh
         run: |
