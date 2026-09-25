@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QDir, QLockFile, QObject, QPoint, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -410,16 +410,29 @@ def _server_name() -> str:
     return f"{APP_ID}-{getpass.getuser()}"
 
 
-def _send_to_running(cmd: str) -> bool:
-    """Если приложение уже запущено — передаём ему команду и выходим."""
-    sock = QLocalSocket()
-    sock.connectToServer(_server_name())
-    if not sock.waitForConnected(300):
-        return False
-    sock.write(cmd.encode())
-    sock.waitForBytesWritten(300)
-    sock.disconnectFromServer()
-    return True
+def _instance_lock() -> QLockFile:
+    """Замок «приложение уже запущено». Держит его первая копия; после сбоя или
+    «Снять задачу» замок считается устаревшим (процесса с этим PID больше нет)."""
+    lock = QLockFile(QDir.temp().filePath(f"{_server_name()}.lock"))
+    lock.setStaleLockTime(0)          # устаревание — только по PID, не по времени
+    return lock
+
+
+def _send_to_running(cmd: str, timeout_ms: int = 300) -> bool:
+    """Передаёт команду запущенной копии. Повторяет попытки до timeout_ms:
+    первая копия может быть занята (запуск записи, сохранение) и ответить не сразу."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        sock = QLocalSocket()
+        sock.connectToServer(_server_name())
+        if sock.waitForConnected(500):
+            sock.write(cmd.encode())
+            sock.waitForBytesWritten(1000)
+            sock.disconnectFromServer()
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
 
 
 def _hide_dock_icon() -> None:
@@ -444,8 +457,11 @@ def main() -> int:
     qapp.setStyle("Fusion")                 # одинаковая база на всех ОС, дальше — наш QSS
     qapp.setWindowIcon(icons.logo_icon())
 
-    if _send_to_running(cmd or "settings"):
-        return 0
+    lock = _instance_lock()
+    if not lock.tryLock(0):
+        # Уже запущено: только передаём команду. Вторую копию не поднимаем никогда —
+        # иначе `Kadr.exe --full` при занятой первой копии остался бы висеть в трее.
+        return 0 if _send_to_running(cmd or "settings", timeout_ms=10_000) else 1
 
     if sys.platform == "darwin":
         _hide_dock_icon()
@@ -485,4 +501,6 @@ def main() -> int:
         app.store.save()
         QTimer.singleShot(300, app.open_settings)
 
-    return qapp.exec()
+    code = qapp.exec()
+    lock.unlock()
+    return code
