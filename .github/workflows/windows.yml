@@ -1,0 +1,77 @@
+# Сборка Kadr для Windows: тесты → FFmpeg → PyInstaller → установщик Inno Setup.
+# Готовые файлы — во вкладке Actions (артефакт «Kadr-Windows»),
+# а при пуше тега вида v1.2.3 — в разделе Releases.
+name: Windows build
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # нужно только для публикации релиза по тегу
+
+env:
+  PYTHONUTF8: "1"   # кириллица в выводе скриптов на консоли cp1252
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Зависимости
+        run: python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Тесты
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: FFmpeg
+        run: python scripts/fetch_ffmpeg.py
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Сборка
+        run: python scripts/build.py
+
+      - name: Проверка сборки
+        shell: pwsh
+        run: |
+          foreach ($f in "dist\Kadr\Kadr.exe", "dist\Kadr\_internal\kadr\bin\ffmpeg.exe", "dist\Kadr-Setup.exe", "dist\Kadr-portable.zip") {
+            if (-not (Test-Path $f)) { throw "Нет файла $f" }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kadr-Windows
+          path: |
+            dist/Kadr-Setup.exe
+            dist/Kadr-portable.zip
+
+      - name: Релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Kadr ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            **Скачайте `Kadr-Setup.exe`** и запустите — программа установится с ярлыками на рабочем столе и в «Пуске».
+            `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
+            Если Windows SmartScreen предупредит о неизвестном издателе: «Подробнее» → «Выполнить в любом случае».
+          files: |
+            dist/Kadr-Setup.exe
+            dist/Kadr-portable.zip

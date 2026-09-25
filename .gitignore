@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec
+kadr/bin/ffmpeg*
+kadr/bin/FFMPEG-LICENSE.txt
+kadr/_version.py
