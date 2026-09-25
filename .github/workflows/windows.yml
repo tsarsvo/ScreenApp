@@ -95,3 +95,22 @@ jobs:
           files: |
             dist/Kadr-Setup.exe
             dist/Kadr-portable.zip
+
+      # Кнопка «Скачать» в README показывает номер версии — обновляем его сразу после релиза.
+      # Пуш токеном GITHUB_TOKEN не запускает сборку повторно, поэтому зацикливания нет.
+      - name: Обновить версию в README
+        if: env.KADR_VERSION != ''
+        shell: pwsh
+        run: |
+          python scripts/bump_readme.py $env:KADR_VERSION
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "README: кнопка «Скачать» → v$env:KADR_VERSION"
+            git pull --rebase origin main
+            git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw "Не удалось отправить README" }
+          }
+          exit 0

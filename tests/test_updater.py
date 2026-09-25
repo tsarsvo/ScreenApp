@@ -94,7 +94,7 @@ def test_settings_check_updates_button(monkeypatch, tmp_path):
     from kadr.theme import ThemeManager
     from kadr.ui.settings_window import SettingsWindow
 
-    app = QApplication.instance() or QApplication([])  # noqa: F841
+    QApplication.instance() or QApplication([])  # окну настроек нужен QApplication
     monkeypatch.setattr(config, "config_dir", lambda: tmp_path)
     u = updater.Updater()
     calls = []
