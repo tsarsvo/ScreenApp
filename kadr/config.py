@@ -46,6 +46,16 @@ class Settings:
     autostart: bool = False
     notify_on_save: bool = True
     theme: str = "system"              # system | light | dark
+    # Буфер повтора (запись последних N минут экрана со звуком)
+    replay_enabled: bool = False
+    replay_minutes: int = 2            # 1..5
+    hotkey_replay: str = "alt+shift+r"
+    replay_fps: int = 30               # 30 | 60
+    replay_height: int = 0             # 0 — исходное, 1080, 720
+    replay_monitor: int = 0
+    replay_system_audio: bool = True
+    replay_mic: bool = False
+    replay_mic_device: str = ""        # "" — микрофон по умолчанию
     # Последние использованные параметры кисти — чтобы не выбирать каждый раз
     pen_color: str = "#FF3B30"
     pen_width: int = 4
@@ -57,6 +67,11 @@ class Settings:
             self.image_format = "png"
         self.quality = max(1, min(100, int(self.quality)))
         self.pen_width = max(1, min(40, int(self.pen_width)))
+        self.replay_minutes = max(1, min(5, int(self.replay_minutes)))
+        if self.replay_fps not in (30, 60):
+            self.replay_fps = 30
+        if self.replay_height not in (0, 1080, 720):
+            self.replay_height = 0
 
 
 class SettingsStore(QObject):

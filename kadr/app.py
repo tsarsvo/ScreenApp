@@ -5,8 +5,8 @@ import getpass
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Qt
-from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QImage
+from PySide6.QtCore import QObject, QRect, QTimer, QUrl, Qt
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -15,6 +15,7 @@ from .capture import grab_full_desktop, grab_screens
 from .config import SettingsStore
 from .hotkeys import HotkeyManager, label_for
 from .overlay import CaptureSession
+from .replay import ReplayOptions, ReplayRecorder
 from .saver import copy_to_clipboard, save_image
 from .theme import ThemeManager
 
@@ -35,6 +36,16 @@ class KadrApp(QObject):
         self.hotkeys.triggered.connect(self._on_hotkey)
         self.store.changed.connect(self._on_setting_changed)
 
+        # Буфер повтора: запускается в фоне, если включён в настройках
+        self.replay = ReplayRecorder()
+        self.replay.running_changed.connect(self._on_replay_running)
+        self.replay.error.connect(lambda e: self.notify(e, error=True))
+        self.replay.saved.connect(lambda p: self.notify(f"Повтор сохранён: {p.name}"))
+        self.replay.save_failed.connect(lambda e: self.notify(f"Повтор не сохранён: {e}", error=True))
+        self._replay_restart = QTimer(self, singleShot=True, interval=800)  # debounce при смене настроек
+        self._replay_restart.timeout.connect(self._apply_replay)
+        qapp.aboutToQuit.connect(self.replay.stop)
+
         self._build_tray()
         self._hotkey_errors = self._register_hotkeys()
         self._sync_autostart()
@@ -42,6 +53,8 @@ class KadrApp(QObject):
 
         if self.hotkeys.error:
             self.notify(self.hotkeys.error, error=True)
+        if self.store.data.replay_enabled:
+            QTimer.singleShot(1500, self._apply_replay)
 
     # -------------------------------------------------------------------- tray
     def _build_tray(self) -> None:
@@ -51,6 +64,12 @@ class KadrApp(QObject):
         self.menu = QMenu()
         self.act_region = self.menu.addAction("Выделить область", lambda: self.capture_region())
         self.act_full = self.menu.addAction("Весь экран", lambda: self.capture_full())
+        self.menu.addSeparator()
+        self.act_replay_save = self.menu.addAction("Сохранить повтор", self.save_replay)
+        self.act_replay_toggle = self.menu.addAction("Запись повтора")
+        self.act_replay_toggle.setCheckable(True)
+        self.act_replay_toggle.setChecked(self.store.data.replay_enabled)
+        self.act_replay_toggle.toggled.connect(lambda on: self.store.set("replay_enabled", on))
         self.menu.addSeparator()
         self.act_folder = self.menu.addAction("Открыть папку", self.open_folder)
         self.act_settings = self.menu.addAction("Настройки…", self.open_settings)
@@ -69,12 +88,15 @@ class KadrApp(QObject):
         self.act_folder.setIcon(icons.icon("folder", c))
         self.act_settings.setIcon(icons.icon("settings", c))
         self.act_quit.setIcon(icons.icon("power", c))
+        self.act_replay_save.setIcon(icons.icon("replay", c))
         self._update_menu_shortcuts()
 
     def _update_menu_shortcuts(self) -> None:
         s = self.store.data
         self.act_region.setText(f"Выделить область\t{label_for(s.hotkey_region)}")
         self.act_full.setText(f"Весь экран\t{label_for(s.hotkey_full)}")
+        self.act_replay_save.setText(f"Сохранить повтор ({s.replay_minutes} мин)\t{label_for(s.hotkey_replay)}")
+        self.act_replay_save.setEnabled(self.replay.running)
 
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -87,12 +109,13 @@ class KadrApp(QObject):
     # ----------------------------------------------------------------- hotkeys
     def _register_hotkeys(self) -> dict[str, str]:
         s = self.store.data
-        errors = self.hotkeys.set_bindings({"full": s.hotkey_full, "region": s.hotkey_region})
+        errors = self.hotkeys.set_bindings(
+            {"full": s.hotkey_full, "region": s.hotkey_region, "replay": s.hotkey_replay})
         self._show_hotkey_errors(errors)
         return errors
 
     def _show_hotkey_errors(self, errors: dict[str, str]) -> None:
-        names = {"full": "весь экран", "region": "выделение области"}
+        names = {"full": "весь экран", "region": "выделение области", "replay": "сохранить повтор"}
         text = "; ".join(f"{names[a]}: {e}" for a, e in errors.items() if e)
         if self.settings_window:
             self.settings_window.show_hotkey_error(text)
@@ -104,6 +127,8 @@ class KadrApp(QObject):
             self.capture_full()
         elif action == "region":
             self.capture_region()
+        elif action == "replay":
+            self.save_replay()
 
     def _on_hotkey_recording(self, recording: bool) -> None:
         if recording:
@@ -113,11 +138,52 @@ class KadrApp(QObject):
 
     # ---------------------------------------------------------------- settings
     def _on_setting_changed(self, name: str) -> None:
-        if name in ("hotkey_full", "hotkey_region"):
+        if name in ("hotkey_full", "hotkey_region", "hotkey_replay"):
             self._register_hotkeys()
             self._update_menu_shortcuts()
         elif name == "theme":
             self.theme.set_mode(self.store.data.theme)
+        elif name.startswith("replay_"):
+            if name == "replay_enabled":
+                self.act_replay_toggle.blockSignals(True)
+                self.act_replay_toggle.setChecked(self.store.data.replay_enabled)
+                self.act_replay_toggle.blockSignals(False)
+            self._update_menu_shortcuts()
+            self._replay_restart.start()
+
+    # ------------------------------------------------------------------ replay
+    def _replay_options(self) -> ReplayOptions:
+        s = self.store.data
+        screens = QGuiApplication.screens()
+        idx = s.replay_monitor if 0 <= s.replay_monitor < len(screens) else 0
+        scr = screens[idx]
+        g, dpr = scr.geometry(), scr.devicePixelRatio()
+        rect = QRect(round(g.x() * dpr), round(g.y() * dpr), round(g.width() * dpr), round(g.height() * dpr))
+        return ReplayOptions(minutes=s.replay_minutes, fps=s.replay_fps, height=s.replay_height, monitor=idx,
+                             screen_rect=rect, system_audio=s.replay_system_audio, mic=s.replay_mic,
+                             mic_device=s.replay_mic_device)
+
+    def _apply_replay(self) -> None:
+        """(Пере)запускает или останавливает буфер повтора по текущим настройкам."""
+        if self.store.data.replay_enabled:
+            self.replay.start(self._replay_options())
+        else:
+            self.replay.stop()
+
+    def _on_replay_running(self, running: bool) -> None:
+        # Красная точка на значке — видно, что идёт запись
+        self.tray.setIcon(_with_rec_dot(self._tray_icon()) if running else self._tray_icon())
+        self.tray.setToolTip(f"{APP_NAME} — идёт запись повтора" if running else APP_NAME)
+        self._update_menu_shortcuts()
+
+    def _tray_icon(self) -> QIcon:
+        return icons.logo_icon(sys.platform == "darwin")
+
+    def save_replay(self) -> None:
+        if not self.replay.running:
+            self.notify("Запись повтора выключена — включите её в настройках", error=True)
+            return
+        self.replay.save(self.store.data.save_dir)
 
     def _sync_autostart(self) -> None:
         """Если автозапуск включён — обновляем запись (путь к приложению мог измениться)."""
@@ -131,7 +197,7 @@ class KadrApp(QObject):
         if self.settings_window is None:
             from .ui.settings_window import SettingsWindow
 
-            self.settings_window = SettingsWindow(self.store, self.theme)
+            self.settings_window = SettingsWindow(self.store, self.theme, self.replay)
             self.settings_window.hotkey_recording.connect(self._on_hotkey_recording)
             self.settings_window.show_hotkey_error(
                 "; ".join(e for e in self._hotkey_errors.values() if e))
@@ -206,6 +272,23 @@ class KadrApp(QObject):
             self.capture_full()
         elif cmd == "settings":
             self.open_settings()
+        elif cmd == "replay":
+            self.save_replay()
+
+
+def _with_rec_dot(icon: QIcon) -> QIcon:
+    out = QIcon()
+    for size in (16, 20, 24, 32, 48, 64):
+        px = icon.pixmap(size, size)
+        p = QPainter(px)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        d = size * 0.42
+        p.setPen(QColor("#FFFFFF"))
+        p.setBrush(QColor("#FF3B30"))
+        p.drawEllipse(round(size - d - 0.5), round(size - d - 0.5), round(d), round(d))
+        p.end()
+        out.addPixmap(px)
+    return out
 
 
 def _server_name() -> str:
@@ -236,7 +319,8 @@ def _hide_dock_icon() -> None:
 
 def main() -> int:
     args = sys.argv[1:]
-    cmd = "region" if "--region" in args else "full" if "--full" in args else "settings" if "--settings" in args else ""
+    flags = {"--region": "region", "--full": "full", "--settings": "settings", "--save-replay": "replay"}
+    cmd = next((c for f, c in flags.items() if f in args), "")
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     qapp = QApplication(sys.argv)

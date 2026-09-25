@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QSlider, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, autostart, icons
 from ..config import SettingsStore
@@ -16,11 +16,13 @@ from .widgets import HotkeyEdit, Segmented, ToggleSwitch
 
 class SettingsWindow(QWidget):
     hotkey_recording = Signal(bool)   # приложение отключает глобальные хоткеи на время записи
+    _mics_loaded = Signal(list)        # из фонового потока → GUI
 
-    def __init__(self, store: SettingsStore, theme: ThemeManager) -> None:
+    def __init__(self, store: SettingsStore, theme: ThemeManager, replay=None) -> None:
         super().__init__(None, Qt.WindowType.Window)
         self.store = store
         self.theme = theme
+        self.replay = replay
         s = store.data
 
         self.setObjectName("Root")
@@ -29,7 +31,19 @@ class SettingsWindow(QWidget):
         self.setMinimumWidth(500)
         self._toggles: list[ToggleSwitch] = []
 
-        root = QVBoxLayout(self)
+        # Содержимое прокручивается — окно помещается и на маленьких экранах
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(self)
+        scroll.setObjectName("Scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("Root")
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+        root = QVBoxLayout(content)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(10)
 
@@ -57,11 +71,14 @@ class SettingsWindow(QWidget):
         # --- Горячие клавиши
         self.hk_full = HotkeyEdit(s.hotkey_full)
         self.hk_region = HotkeyEdit(s.hotkey_region)
+        self.hk_replay = HotkeyEdit(s.hotkey_replay)
         self.hk_error = QLabel("")
         self.hk_error.setObjectName("Error")
         self.hk_error.setWordWrap(True)
         self.hk_error.hide()
-        for edit, field in ((self.hk_full, "hotkey_full"), (self.hk_region, "hotkey_region")):
+        self._hotkey_edits = {"hotkey_full": self.hk_full, "hotkey_region": self.hk_region,
+                              "hotkey_replay": self.hk_replay}
+        for field, edit in self._hotkey_edits.items():
             edit.recording_changed.connect(self.hotkey_recording)
             edit.hotkey_changed.connect(lambda v, f=field: self._set_hotkey(f, v))
             edit.error.connect(self.show_hotkey_error)
@@ -69,6 +86,8 @@ class SettingsWindow(QWidget):
         self._row(card, "Скриншот всего экрана", self.hk_full, "Сразу сохраняется в папку")
         self._divider(card)
         self._row(card, "Выделение области", self.hk_region)
+        self._divider(card)
+        self._row(card, "Сохранить повтор", self.hk_replay, "Последние минуты записи экрана")
         card.addWidget(self.hk_error)
 
         # --- Сохранение
@@ -108,6 +127,9 @@ class SettingsWindow(QWidget):
         self.quality_row = self._row(card, "Качество", q_row, "Для JPG и WEBP")
         self._update_quality_enabled()
 
+        # --- Повтор экрана
+        self._build_replay_card(root, s)
+
         # --- Поведение
         card = self._card("ПОВЕДЕНИЕ", root)
         self._row(card, "Показывать курсор на скриншоте", self._toggle("show_cursor"))
@@ -144,6 +166,7 @@ class SettingsWindow(QWidget):
         foot.addWidget(hint)
         root.addLayout(foot)
 
+        self._mics_loaded.connect(self._fill_microphones)
         self.theme.changed.connect(self.apply_theme)
         self.apply_theme()
 
@@ -190,8 +213,121 @@ class SettingsWindow(QWidget):
         t = ToggleSwitch()
         t.setChecked(bool(getattr(self.store.data, field)))
         t.toggled.connect(lambda v: self.store.set(field, v))
+        t.setProperty("field", field)
         self._toggles.append(t)
         return t
+
+    # ------------------------------------------------------------------ replay
+    def _build_replay_card(self, root: QVBoxLayout, s) -> None:
+        card = self._card("ПОВТОР ЭКРАНА", root)
+        self._row(card, "Записывать повтор", self._toggle("replay_enabled"),
+                  "Экран пишется в фоне, по сочетанию сохраняются последние минуты")
+        self.replay_status = QLabel("")
+        self.replay_status.setObjectName("Muted")
+        self.replay_status.setStyleSheet("font-size: 11px;")
+        card.addWidget(self.replay_status)
+
+        # Всё, что ниже, активно только при включённой записи
+        self.replay_opts = QWidget()
+        box = QVBoxLayout(self.replay_opts)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        card.addWidget(self.replay_opts)
+
+        self._divider(box)
+        minutes = Segmented([(str(m), f"{m} мин") for m in range(1, 6)], str(s.replay_minutes))
+        minutes.changed.connect(lambda v: self.store.set("replay_minutes", int(v)))
+        self._row(box, "Длительность", minutes)
+        self._divider(box)
+
+        fps = Segmented([("30", "30 fps"), ("60", "60 fps")], str(s.replay_fps))
+        fps.changed.connect(lambda v: self.store.set("replay_fps", int(v)))
+        self._row(box, "Частота кадров", fps)
+        self._divider(box)
+
+        res = QComboBox()
+        for key, text in ((0, "Исходное"), (1080, "1080p"), (720, "720p")):
+            res.addItem(text, key)
+        res.setCurrentIndex(max(0, res.findData(s.replay_height)))
+        res.currentIndexChanged.connect(lambda _i: self.store.set("replay_height", res.currentData()))
+        self._row(box, "Разрешение", res, "Меньше — легче файл и нагрузка")
+
+        screens = QGuiApplication.screens()
+        if len(screens) > 1:
+            self._divider(box)
+            mon = QComboBox()
+            for i, scr in enumerate(screens):
+                g = scr.geometry()
+                mon.addItem(f"{i + 1}: {scr.name()} ({round(g.width() * scr.devicePixelRatio())}×"
+                            f"{round(g.height() * scr.devicePixelRatio())})", i)
+            mon.setCurrentIndex(max(0, mon.findData(s.replay_monitor)))
+            mon.currentIndexChanged.connect(lambda _i: self.store.set("replay_monitor", mon.currentData()))
+            self._row(box, "Монитор", mon)
+
+        self._divider(box)
+        self._row(box, "Звук системы", self._toggle("replay_system_audio"))
+        self._divider(box)
+        self._row(box, "Микрофон", self._toggle("replay_mic"))
+        self.mic_box = QComboBox()
+        self.mic_box.setMinimumWidth(260)
+        self.mic_box.addItem("По умолчанию", "")
+        self.mic_box.currentIndexChanged.connect(self._on_mic_chosen)
+        self.mic_row = self._row(box, "Устройство", self.mic_box)
+        self._load_microphones()
+
+        self.store.changed.connect(self._on_store_changed)
+        if self.replay is not None:
+            self.replay.running_changed.connect(lambda _r: self._update_replay_ui())
+        self._update_replay_ui()
+
+    def _load_microphones(self) -> None:
+        """Список микрофонов собираем в фоне — FFmpeg опрашивает устройства ~1 с."""
+        import threading
+
+        from ..replay import ffmpeg as ff
+
+        def work():
+            names = ff.list_microphones(ff.find_ffmpeg())
+            self._mics_loaded.emit(names)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fill_microphones(self, names: list) -> None:
+        current = self.store.data.replay_mic_device
+        self.mic_box.blockSignals(True)
+        self.mic_box.clear()
+        self.mic_box.addItem("По умолчанию", "")
+        for n in names:
+            self.mic_box.addItem(n, n)
+        if current and current not in names:  # устройство отключено — оставляем в списке
+            self.mic_box.addItem(f"{current} (не подключён)", current)
+        self.mic_box.setCurrentIndex(max(0, self.mic_box.findData(current)))
+        self.mic_box.blockSignals(False)
+
+    def _on_mic_chosen(self, _i: int) -> None:
+        self.store.set("replay_mic_device", self.mic_box.currentData() or "")
+
+    def _on_store_changed(self, name: str) -> None:
+        # Настройку могли поменять из меню трея — синхронизируем тумблеры
+        for t in self._toggles:
+            if t.property("field") == name and t.isChecked() != getattr(self.store.data, name):
+                t.setChecked(getattr(self.store.data, name))
+        if name.startswith("replay_"):
+            self._update_replay_ui()
+
+    def _update_replay_ui(self) -> None:
+        d = self.store.data
+        self.replay_opts.setEnabled(d.replay_enabled)
+        self.mic_row.setEnabled(d.replay_enabled and d.replay_mic)
+        if not d.replay_enabled:
+            text = "Выключено"
+        elif self.replay is not None and self.replay.running:
+            enc = {"h264_nvenc": "NVIDIA NVENC", "h264_amf": "AMD AMF", "h264_qsv": "Intel Quick Sync",
+                   "h264_mf": "Media Foundation"}.get(self.replay.encoder or "", self.replay.encoder or "")
+            text = f"● Идёт запись · кодер: {enc}"
+        else:
+            text = "Запуск…"
+        self.replay_status.setText(text)
 
     # ---------------------------------------------------------------- actions
     def apply_theme(self) -> None:
@@ -205,11 +341,10 @@ class SettingsWindow(QWidget):
         self.hk_error.setVisible(bool(text))
 
     def _set_hotkey(self, field: str, value: str) -> None:
-        other = self.store.data.hotkey_region if field == "hotkey_full" else self.store.data.hotkey_full
-        if value and value == other:
+        others = [getattr(self.store.data, f) for f in self._hotkey_edits if f != field]
+        if value and value in others:
             self.show_hotkey_error("Это сочетание уже используется для другого действия")
-            edit = self.hk_full if field == "hotkey_full" else self.hk_region
-            edit.set_value(getattr(self.store.data, field))
+            self._hotkey_edits[field].set_value(getattr(self.store.data, field))
             return
         self.show_hotkey_error("")
         self.store.set(field, value)
@@ -251,4 +386,4 @@ class SettingsWindow(QWidget):
         self.activateWindow()
 
     def sizeHint(self) -> QSize:
-        return QSize(540, 640)
+        return QSize(560, 760)

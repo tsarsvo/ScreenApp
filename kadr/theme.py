@@ -84,6 +84,10 @@ def settings_stylesheet(t: Tokens, check_icon: str) -> str:
     """QSS для окна настроек. Всё строится на токенах, поэтому тема меняется на лету."""
     return f"""
     QWidget#Root {{ background: {t.bg}; }}
+    QScrollArea#Scroll {{ background: {t.bg}; border: none; }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+    QScrollBar::handle:vertical {{ background: {t.border}; border-radius: 3px; min-height: 30px; }}
+    QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: none; height: 0; }}
     QWidget {{ color: {t.text}; font-size: 13px; }}
     QLabel#Title {{ font-size: 17px; font-weight: 600; }}
     QLabel#Muted, QLabel#SectionTitle {{ color: {t.muted}; }}

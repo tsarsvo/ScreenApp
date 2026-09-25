@@ -8,3 +8,5 @@ pynput>=1.7.7
 Pillow>=10.0
 # macOS: скрыть иконку из Dock (приложение живёт только в строке меню)
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+# Windows: звук системы для буфера повтора (WASAPI loopback)
+PyAudioWPatch>=0.2.12; sys_platform == "win32"
