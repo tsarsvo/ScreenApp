@@ -1,6 +1,7 @@
 # Сборка Kadr для Windows: тесты → FFmpeg → PyInstaller → установщик Inno Setup.
-# Готовые файлы — во вкладке Actions (артефакт «Kadr-Windows»),
-# а при пуше тега вида v1.2.3 — в разделе Releases.
+# Готовые файлы — во вкладке Actions (артефакт «Kadr-Windows»).
+# Релиз: Actions → Windows build → Run workflow → указать версию (например 1.1.0)
+# или запушить тег вида v1.1.0 — установщик появится в разделе Releases.
 name: Windows build
 
 on:
@@ -9,18 +10,31 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия релиза, например 1.1.0 (пусто — просто сборка без релиза)"
+        required: false
+        default: ""
 
 permissions:
   contents: write   # нужно только для публикации релиза по тегу
 
 env:
   PYTHONUTF8: "1"   # кириллица в выводе скриптов на консоли cp1252
+  # Версия из формы «Run workflow»; для тегов build.py берёт её из имени тега
+  KADR_VERSION: ${{ inputs.version }}
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Проверка номера версии
+        if: env.KADR_VERSION != ''
+        shell: pwsh
+        run: |
+          if ($env:KADR_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Версия должна быть вида 1.2.3, получено: $env:KADR_VERSION" }
 
       - uses: actions/setup-python@v5
         with:
@@ -63,10 +77,13 @@ jobs:
             dist/Kadr-portable.zip
 
       - name: Релиз
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || env.KADR_VERSION != ''
         uses: softprops/action-gh-release@v2
         with:
-          name: Kadr ${{ github.ref_name }}
+          # При запуске из формы тег создаётся здесь же, на собранном коммите
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.KADR_VERSION) }}
+          target_commitish: ${{ github.sha }}
+          name: Kadr ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.KADR_VERSION) }}
           generate_release_notes: true
           body: |
             **Скачайте `Kadr-Setup.exe`** и запустите — программа установится с ярлыками на рабочем столе и в «Пуске».
