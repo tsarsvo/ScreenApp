@@ -66,6 +66,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: Kadr ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            **Скачайте `Kadr-Setup.exe`** и запустите — программа установится с ярлыками на рабочем столе и в «Пуске».
+            `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
+            Если Windows SmartScreen предупредит о неизвестном издателе: «Подробнее» → «Выполнить в любом случае».
           files: |
             dist/Kadr-Setup.exe
             dist/Kadr-portable.zip

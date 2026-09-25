@@ -2,4 +2,10 @@
 
 APP_NAME = "Kadr"
 APP_ID = "app.kadr.screenshot"
-__version__ = "1.0.0"
+DEFAULT_VERSION = "1.0.0"
+
+try:
+    # Файл создаёт scripts/build.py из git-тега релиза (v1.2.3 → "1.2.3")
+    from ._version import __version__
+except ImportError:
+    __version__ = DEFAULT_VERSION

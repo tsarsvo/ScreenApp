@@ -4,6 +4,12 @@
 <p align="center">Минималистичное кроссплатформенное приложение для скриншотов — аналог Lightshot.</p>
 
 <p align="center">
+  <a href="https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe"><b>⬇ Скачать для Windows (Kadr-Setup.exe)</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/tsarsvo/ScreenApp/releases/latest">Все версии</a>
+</p>
+
+<p align="center">
   <img src="docs/overlay-light.png" width="49%"> <img src="docs/overlay-dark.png" width="49%">
 </p>
 
@@ -28,11 +34,11 @@
 ## Установка на Windows (как обычная программа)
 
 **Способ 1 — установщик (рекомендуется).** Python не нужен.
-1. Откройте вкладку **Actions** репозитория → последний успешный запуск *Windows build* → внизу скачайте артефакт **Kadr-Windows** (или возьмите файл в разделе **Releases**, если выпущена версия).
-2. Распакуйте и запустите **`Kadr-Setup.exe`**. Права администратора не нужны.
+1. Скачайте **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)** — последняя версия из раздела [Releases](https://github.com/tsarsvo/ScreenApp/releases).
+2. Запустите **`Kadr-Setup.exe`**. Права администратора не нужны.
 3. Готово: ярлык **Kadr** на рабочем столе и в меню «Пуск», запуск двойным кликом, значок появится в трее возле часов.
 
-Там же лежит `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
+В релизе также лежит `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
 
 > Windows SmartScreen может предупредить о «неизвестном издателе», потому что сборка не подписана сертификатом. Нажмите «Подробнее» → «Выполнить в любом случае».
 
@@ -204,3 +210,14 @@ X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=2
 ```
 Этот стандарт понимают GNOME, KDE Plasma, XFCE, Cinnamon, MATE и LXQt. Задержка в 2 секунды нужна, чтобы трей успел загрузиться. Для оконных менеджеров без поддержки XDG (i3, bspwm) добавьте `main.py` в их конфиг, например `exec` в i3.
+
+## Выпуск новой версии
+
+Номер версии берётся из git-тега, править код не нужно:
+
+```bash
+git checkout main && git pull
+git tag v1.1.0 && git push origin v1.1.0
+```
+
+GitHub Actions соберёт установщик и опубликует релиз **Kadr v1.1.0** с `Kadr-Setup.exe` и `Kadr-portable.zip`. Ссылка «Скачать» в начале README всегда ведёт на последний релиз.

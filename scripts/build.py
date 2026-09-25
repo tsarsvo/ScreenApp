@@ -9,6 +9,7 @@ Inno Setup 6, установщик dist/Kadr-Setup.exe (ярлыки на раб
 macOS: dist/Kadr.app. Linux: dist/Kadr/Kadr.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):
 from PIL import Image  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 
-from kadr import APP_NAME, __version__  # noqa: E402
+from kadr import APP_NAME, DEFAULT_VERSION  # noqa: E402
 from kadr.icons import LOGO_SVG, logo_image  # noqa: E402
 
 DIST = ROOT / "dist"
@@ -47,6 +48,19 @@ def make_icons() -> Path:
     return res
 
 
+def resolve_version() -> str:
+    """Версия сборки: тег релиза (v1.2.3) в GitHub Actions, иначе KADR_VERSION или версия из кода.
+    Записывается в kadr/_version.py — её видят окно настроек и установщик."""
+    ref = os.environ.get("GITHUB_REF_NAME", "")
+    version = os.environ.get("KADR_VERSION") or (ref[1:] if re.fullmatch(r"v\d+(\.\d+)*", ref) else "")
+    path = ROOT / "kadr" / "_version.py"
+    if version:
+        path.write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+        return version
+    path.unlink(missing_ok=True)
+    return DEFAULT_VERSION
+
+
 def find_iscc() -> str | None:
     """Компилятор Inno Setup: в PATH или в стандартных папках установки."""
     found = shutil.which("iscc")
@@ -60,6 +74,8 @@ def find_iscc() -> str | None:
 
 
 def main() -> None:
+    version = resolve_version()
+    print(f"Версия: {version}")
     res = make_icons()
     icon = res / ("logo.icns" if sys.platform == "darwin" else "logo.ico")
     sep = ";" if sys.platform == "win32" else ":"
@@ -94,7 +110,7 @@ def main() -> None:
         print(f"Портативная версия: {portable}")
         iscc = find_iscc()
         if iscc:
-            subprocess.run([iscc, f"/DAppVersion={__version__}", str(ROOT / "installer" / "kadr.iss")],
+            subprocess.run([iscc, f"/DAppVersion={version}", str(ROOT / "installer" / "kadr.iss")],
                            check=True, cwd=ROOT)
             print(f"Установщик: {DIST / 'Kadr-Setup.exe'}")
         else:
