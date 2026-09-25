@@ -34,9 +34,13 @@ from kadr.icons import LOGO_SVG, logo_image  # noqa: E402
 DIST = ROOT / "dist"
 
 
-def make_icons() -> Path:
+def _ensure_qt() -> None:
     global _APP
-    _APP = QGuiApplication.instance() or QGuiApplication([])  # нужен для рендера SVG
+    _APP = QGuiApplication.instance() or QGuiApplication([])  # нужен для рендера SVG и картинок
+
+
+def make_icons() -> Path:
+    _ensure_qt()
     res = ROOT / "kadr" / "resources"
     res.mkdir(exist_ok=True)
     (res / "logo.svg").write_text(LOGO_SVG, encoding="utf-8")
@@ -46,6 +50,63 @@ def make_icons() -> Path:
     if sys.platform == "darwin":
         img.save(res / "logo.icns")
     return res
+
+
+def make_installer_images() -> None:
+    """Картинки мастера установки Inno Setup: боковой баннер и логотип в шапке.
+    Несколько размеров — установщик сам берёт подходящий под масштаб экрана."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter
+
+    _ensure_qt()
+    out = ROOT / "installer" / "generated"
+    out.mkdir(parents=True, exist_ok=True)
+
+    def save_bmp(img: QImage, path: Path) -> None:
+        tmp = path.with_suffix(".png")
+        img.save(str(tmp))
+        Image.open(tmp).convert("RGB").save(path, "BMP")   # Inno Setup ждёт 24-битный BMP
+        tmp.unlink()
+
+    for k in (1.0, 1.5, 2.0):
+        w, h = round(164 * k), round(314 * k)
+        img = QImage(w, h, QImage.Format.Format_RGB32)
+        p = QPainter(img)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        g = QLinearGradient(0, 0, w * 0.4, h)
+        g.setColorAt(0, QColor("#4C7DFF"))
+        g.setColorAt(1, QColor("#7A5CFF"))
+        p.fillRect(img.rect(), g)
+        # декоративные «уголки рамки» на фоне
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 18))
+        p.drawEllipse(QRectF(-w * 0.5, h * 0.62, w * 1.3, w * 1.3))
+        logo = logo_image(round(84 * k))
+        p.drawImage(round((w - logo.width()) / 2), round(h * 0.2), logo)
+        p.setPen(QColor("#FFFFFF"))
+        f = QFont()
+        f.setPixelSize(round(30 * k))
+        f.setWeight(QFont.Weight.Bold)
+        p.setFont(f)
+        p.drawText(QRectF(0, h * 0.2 + 100 * k, w, 40 * k), Qt.AlignmentFlag.AlignCenter, APP_NAME)
+        f.setPixelSize(round(11 * k))
+        f.setWeight(QFont.Weight.Normal)
+        p.setFont(f)
+        p.setPen(QColor(255, 255, 255, 215))
+        p.drawText(QRectF(10 * k, h * 0.2 + 140 * k, w - 20 * k, 40 * k),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap, "Скриншоты и повтор экрана")
+        p.end()
+        save_bmp(img, out / f"wizard-{w}.bmp")
+
+    for size in (55, 83, 110):
+        img = QImage(size, size, QImage.Format.Format_RGB32)
+        img.fill(QColor("#FFFFFF"))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        logo = logo_image(round(size * 0.86))
+        p.drawImage(round((size - logo.width()) / 2), round((size - logo.height()) / 2), logo)
+        p.end()
+        save_bmp(img, out / f"small-{size}.bmp")
 
 
 def resolve_version() -> str:
@@ -110,6 +171,7 @@ def main() -> None:
         print(f"Портативная версия: {portable}")
         iscc = find_iscc()
         if iscc:
+            make_installer_images()
             subprocess.run([iscc, f"/DAppVersion={version}", str(ROOT / "installer" / "kadr.iss")],
                            check=True, cwd=ROOT)
             print(f"Установщик: {DIST / 'Kadr-Setup.exe'}")

@@ -14,7 +14,7 @@ import math
 import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence, QMouseEvent,
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence, QMouseEvent,
                            QPainter, QPainterPath, QPen, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
@@ -63,8 +63,10 @@ class Overlay(QWidget):
     save_requested = Signal(QImage)
     cancelled = Signal()
     style_changed = Signal(QColor, int)
+    palette_changed = Signal(list)
 
-    def __init__(self, shot: ScreenShot, tokens: Tokens, color: QColor, width: int) -> None:
+    def __init__(self, shot: ScreenShot, tokens: Tokens, color: QColor, width: int,
+                 palette: list[str] | None = None) -> None:
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         if sys.platform != "darwin":
             flags |= Qt.WindowType.Tool  # не показывать в панели задач
@@ -123,9 +125,16 @@ class Overlay(QWidget):
         self.toolbar.cancel.connect(self.cancelled)
         self.toolbar.style_clicked.connect(self._toggle_popup)
 
-        self.popup = StylePopup(self)
+        self.popup = StylePopup(self, palette)
         self.popup.color_changed.connect(self._set_color)
         self.popup.width_changed.connect(self._set_width)
+        self.popup.palette_changed.connect(self.palette_changed)
+        self.popup.pick_requested.connect(self.start_picking)
+        self.popup.resized.connect(lambda: self._place_popup(animate=False))
+
+        # Пипетка: берём цвет прямо со снимка экрана
+        self._picking = False
+        self._shot_image: QImage | None = None
 
         self.apply_theme(tokens)
         self.toolbar.set_tool(self._tool)
@@ -244,6 +253,10 @@ class Overlay(QWidget):
         if self.popup.isVisible():
             self.popup.hide()
             return
+        self._place_popup()
+
+    def _place_popup(self, animate: bool = True) -> None:
+        self.popup.layout().activate()
         self.popup.adjustSize()
         tb = self.toolbar.geometry()
         btn = self.toolbar.style_btn.geometry().translated(tb.topLeft())
@@ -255,9 +268,37 @@ class Overlay(QWidget):
         # Открываем в сторону «от выделения», чтобы не закрывать скриншот
         toolbar_above_sel = self._sel and tb.center().y() < self._sel.center().y()
         if fits_below and not (toolbar_above_sel and above >= -SHADOW):
-            self.popup.appear_at(QPoint(x, below), QPoint(0, -6))
+            pos, offset = QPoint(x, below), QPoint(0, -6)
         else:
-            self.popup.appear_at(QPoint(x, above))
+            pos, offset = QPoint(x, above), QPoint(0, 6)
+        # Раскрытый выбор цвета высокий — не даём панели уйти за край экрана
+        pos.setY(max(-SHADOW + 4, min(pos.y(), self.height() - self.popup.height() + SHADOW - 4)))
+        if animate or not self.popup.isVisible():
+            self.popup.appear_at(pos, offset)
+        else:
+            self.popup.move_now(pos)
+
+    # ------------------------------------------------------------- пипетка
+    def start_picking(self) -> None:
+        """Режим пипетки: курсор-прицел с лупой, клик берёт цвет пикселя скриншота."""
+        if self._shot_image is None:
+            self._shot_image = self._shot.pixmap.toImage()
+        self._picking = True
+        self.popup.hide_for_picking()
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self._mouse = self.mapFromGlobal(QCursor.pos())
+        self.update()
+
+    def _stop_picking(self) -> None:
+        self._picking = False
+        self._update_cursor(self._mouse)
+        self.update()
+
+    def _color_at(self, pos: QPoint) -> QColor:
+        img, dpr = self._shot_image, self._shot.dpr
+        x = min(max(0, int(pos.x() * dpr)), img.width() - 1)
+        y = min(max(0, int(pos.y() * dpr)), img.height() - 1)
+        return img.pixelColor(x, y)
 
     # -------------------------------------------------------------- geometry
     def _handle_points(self) -> list[tuple[str, QPointF]]:
@@ -293,6 +334,12 @@ class Overlay(QWidget):
     # ----------------------------------------------------------------- mouse
     def mousePressEvent(self, e: QMouseEvent) -> None:
         pos = e.position().toPoint()
+        if self._picking:
+            self._stop_picking()
+            if e.button() == Qt.MouseButton.LeftButton:
+                self.popup.apply_color(self._color_at(pos))
+            self._place_popup()   # показываем панель снова — с выбранным цветом
+            return
         self.popup.hide()
         if e.button() == Qt.MouseButton.RightButton:
             # ПКМ: сбросить выделение, а если его нет — закрыть оверлей
@@ -330,6 +377,9 @@ class Overlay(QWidget):
         shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         bounds = self.rect()
 
+        if self._picking:
+            self.update()
+            return
         if self._mode == "selecting":
             end = self._constrain_square(self._press, pos) if shift else pos
             self._sel = QRect(self._press, end).normalized().intersected(bounds)
@@ -482,7 +532,15 @@ class Overlay(QWidget):
         if self._editing and self._text_key(e, ctrl, shift):
             return
 
+        if self._picking:
+            if e.key() == Qt.Key.Key_Escape:
+                self._stop_picking()
+                self._place_popup()
+            return
         if e.key() == Qt.Key.Key_Escape:
+            if self.popup.isVisible():
+                self.popup.hide()
+                return
             self.cancelled.emit()
         elif ctrl and _is_key(e, Qt.Key.Key_Z):
             self.redo() if shift else self.undo()
@@ -492,6 +550,8 @@ class Overlay(QWidget):
             self._copy()
         elif ctrl and _is_key(e, Qt.Key.Key_S):
             self._save()
+        elif self._sel and not ctrl and _is_key(e, Qt.Key.Key_I):
+            self.start_picking()
         elif self._sel and not ctrl:
             for key, tool in _TOOL_KEYS.items():
                 if _is_key(e, key):
@@ -560,6 +620,8 @@ class Overlay(QWidget):
         self._paint_size_label(p)
         if self._width_hint:
             self._paint_width_hint(p)
+        if self._picking:
+            self._paint_loupe(p)
 
     def _paint_frame(self, p: QPainter) -> None:
         accent = self._t.q("accent")
@@ -625,6 +687,48 @@ class Overlay(QWidget):
         if self._caret_on:
             p.setPen(QPen(ed.color, 1.5))
             p.drawLine(ed.caret_line())
+
+    def _paint_loupe(self, p: QPainter) -> None:
+        """Лупа пипетки: 15×15 пикселей снимка под курсором, увеличенные в 8 раз."""
+        cells, zoom = 15, 8
+        size = cells * zoom
+        m = self._mouse
+        dpr = self._shot.dpr
+        cx, cy = int(m.x() * dpr), int(m.y() * dpr)
+        src = self._shot_image.copy(cx - cells // 2, cy - cells // 2, cells, cells)
+        # Лупа справа-снизу от курсора, у края экрана — с другой стороны
+        x = m.x() + 24 if m.x() + 24 + size < self.width() else m.x() - 24 - size
+        y = m.y() + 24 if m.y() + 24 + size + 30 < self.height() else m.y() - 24 - size - 30
+        box = QRectF(x, y, size, size)
+        p.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(box, 12, 12)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 90))
+        p.drawRoundedRect(box.adjusted(-3, -2, 3, 5), 14, 14)
+        p.setClipPath(clip)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        p.drawImage(box, src)
+        # центральный пиксель
+        p.setClipping(False)
+        mid = QRectF(x + (cells // 2) * zoom, y + (cells // 2) * zoom, zoom, zoom)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(0, 0, 0), 2))
+        p.drawRect(mid.adjusted(-1, -1, 1, 1))
+        p.setPen(QPen(QColor("#FFFFFF"), 1))
+        p.drawRect(mid)
+        p.setPen(QPen(QColor("#FFFFFF"), 2))
+        p.drawRoundedRect(box, 12, 12)
+        p.restore()
+        color = self._color_at(m)
+        f = QFont()
+        f.setPixelSize(12)
+        f.setWeight(QFont.Weight.Medium)
+        pill = QRectF(x, y + size + 8, size, 24)
+        self._pill(p, pill, "      " + color.name().upper(), f)
+        p.setPen(QPen(QColor("#FFFFFF"), 1))
+        p.setBrush(color)
+        p.drawEllipse(QPointF(pill.left() + 18, pill.center().y()), 6, 6)
 
     def _paint_width_hint(self, p: QPainter) -> None:
         center = QPointF(self._mouse)

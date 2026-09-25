@@ -13,14 +13,17 @@ class CaptureSession(QObject):
     copy_requested = Signal(QImage)
     save_requested = Signal(QImage)
     style_changed = Signal(QColor, int)
+    palette_changed = Signal(list)
     finished = Signal()
 
-    def __init__(self, shots: list[ScreenShot], tokens: Tokens, color: QColor, width: int) -> None:
+    def __init__(self, shots: list[ScreenShot], tokens: Tokens, color: QColor, width: int,
+                 palette: list[str] | None = None) -> None:
         super().__init__()
         self._done = False
         self.overlays: list[Overlay] = []
         for shot in shots:
-            o = Overlay(shot, tokens, color, width)
+            o = Overlay(shot, tokens, color, width, palette)
+            o.palette_changed.connect(self.palette_changed)
             o.selection_started.connect(self._on_selection_started)
             o.copy_requested.connect(lambda img: self._finish(self.copy_requested, img))
             o.save_requested.connect(lambda img: self._finish(self.save_requested, img))

@@ -199,6 +199,7 @@ class KadrApp(QObject):
 
             self.settings_window = SettingsWindow(self.store, self.theme, self.replay)
             self.settings_window.hotkey_recording.connect(self._on_hotkey_recording)
+            self.settings_window.uninstall_done.connect(self.qapp.quit)
             self.settings_window.show_hotkey_error(
                 "; ".join(e for e in self._hotkey_errors.values() if e))
         self.settings_window.present()
@@ -234,7 +235,8 @@ class KadrApp(QObject):
             self.notify("Не удалось сделать снимок экрана", error=True)
             return
         s = self.store.data
-        self.session = CaptureSession(shots, self.theme.tokens, QColor(s.pen_color), s.pen_width)
+        self.session = CaptureSession(shots, self.theme.tokens, QColor(s.pen_color), s.pen_width, s.palette)
+        self.session.palette_changed.connect(lambda pal: self.store.set("palette", list(pal)))
         self.session.copy_requested.connect(self._copy)
         self.session.save_requested.connect(self._save)
         self.session.style_changed.connect(self._remember_style)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QStandardPaths, Signal
@@ -26,6 +26,11 @@ def config_dir() -> Path:
 def default_save_dir() -> str:
     pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
     return str(Path(pictures or Path.home()) / APP_NAME)
+
+
+# Цвета палитры по умолчанию (10 кружков в выборе цвета)
+DEFAULT_PALETTE = ["#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#00C7BE",
+                   "#007AFF", "#5E5CE6", "#AF52DE", "#FFFFFF", "#1C1C1E"]
 
 
 def _default_hotkeys() -> tuple[str, str]:
@@ -59,6 +64,7 @@ class Settings:
     # Последние использованные параметры кисти — чтобы не выбирать каждый раз
     pen_color: str = "#FF3B30"
     pen_width: int = 4
+    palette: list = field(default_factory=lambda: list(DEFAULT_PALETTE))
 
     def __post_init__(self) -> None:
         if not self.save_dir:
@@ -67,11 +73,24 @@ class Settings:
             self.image_format = "png"
         self.quality = max(1, min(100, int(self.quality)))
         self.pen_width = max(1, min(40, int(self.pen_width)))
+        self.palette = _clean_palette(self.palette)
         self.replay_minutes = max(1, min(5, int(self.replay_minutes)))
         if self.replay_fps not in (30, 60):
             self.replay_fps = 30
         if self.replay_height not in (0, 1080, 720):
             self.replay_height = 0
+
+
+def _clean_palette(value) -> list:
+    """Ровно 10 корректных цветов #RRGGBB; испорченные значения заменяются стандартными."""
+    import re
+
+    items = value if isinstance(value, list) else []
+    out = []
+    for i, default in enumerate(DEFAULT_PALETTE):
+        c = items[i] if i < len(items) else default
+        out.append(c.upper() if isinstance(c, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", c) else default)
+    return out
 
 
 class SettingsStore(QObject):

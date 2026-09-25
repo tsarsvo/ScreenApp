@@ -8,3 +8,4 @@ dist/
 kadr/bin/ffmpeg*
 kadr/bin/FFMPEG-LICENSE.txt
 kadr/_version.py
+installer/generated/

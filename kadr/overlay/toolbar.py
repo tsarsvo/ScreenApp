@@ -6,19 +6,20 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
-                               QLabel, QSlider, QToolButton, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QSlider, QToolButton, QVBoxLayout, QWidget)
 
 from .. import icons
+from ..config import DEFAULT_PALETTE
 from ..theme import Tokens
+from ..ui.color_picker import ColorField, HueBar
 from .shapes import Tool
 
 SHADOW = 10          # поле под мягкую тень вокруг панели
 RADIUS = 12
 
-PALETTE = ["#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#00C7BE",
-           "#007AFF", "#5E5CE6", "#AF52DE", "#FFFFFF", "#1C1C1E"]
+PALETTE = DEFAULT_PALETTE
 
 
 class Panel(QWidget):
@@ -58,6 +59,13 @@ class Panel(QWidget):
         self.move(pos + from_offset)
         self._slide.start()
         self._anim.start()
+
+    def move_now(self, pos: QPoint) -> None:
+        """Переставить без анимации (останавливая незаконченную анимацию появления)."""
+        self._slide.stop()
+        self._anim.stop()
+        self._fx.setOpacity(1.0)
+        self.move(pos)
 
     def paintEvent(self, _event) -> None:
         if not self._t:
@@ -230,50 +238,111 @@ class Toolbar(Panel):
 
 
 class Swatch(QAbstractButton):
+    """Кружок палитры. ЛКМ — выбрать цвет, ПКМ — изменить сам кружок."""
+
+    edit_requested = Signal()
+
     def __init__(self, color: str, parent=None) -> None:
         super().__init__(parent)
         self.color = QColor(color)
+        self.editing = False
         self.setCheckable(True)
-        self.setFixedSize(24, 24)
+        self.setFixedSize(26, 26)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setToolTip("Клик — выбрать · правый клик — изменить цвет")
         self.ring = QColor("#3F6BFF")
+        self.outline = QColor(0, 0, 0, 50)
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.RightButton:
+            self.edit_requested.emit()
+            return
+        super().mousePressEvent(e)
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self.isChecked():
-            p.setPen(self.ring)
+        if self.isChecked() or self.editing:
+            style = Qt.PenStyle.DashLine if self.editing else Qt.PenStyle.SolidLine
+            p.setPen(QPen(self.ring, 1.6, style))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(1, 1, 22, 22))
-        p.setPen(QColor(0, 0, 0, 50))
+            p.drawEllipse(QRectF(1.5, 1.5, 23, 23))
+        p.setPen(self.outline)
         p.setBrush(self.color)
-        p.drawEllipse(QRectF(4.5, 4.5, 15, 15))
+        p.drawEllipse(QRectF(5, 5, 16, 16))
+
+
+HINT_DEFAULT = "Правый клик по кружку — изменить цвет палитры"
+HINT_EDIT = "Меняем цвет кружка: выберите цвет ниже, пипеткой или в HEX"
 
 
 class StylePopup(Panel):
-    """Выбор цвета (палитра) и толщины (слайдер)."""
+    """Цвет (палитра, любой цвет, HEX, пипетка) и толщина."""
 
     color_changed = Signal(QColor)
     width_changed = Signal(int)
+    palette_changed = Signal(list)      # новая палитра — сохраняется в настройках
+    pick_requested = Signal()           # пипетка: оверлей переходит в режим выбора цвета с экрана
+    resized = Signal()                  # раскрыли/свернули выбор цвета — оверлей переставит панель
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, palette: list[str] | None = None) -> None:
         super().__init__(parent)
+        self._color = QColor(PALETTE[0])
+        self._edit_index: int | None = None
+        self._hold_edit = False
         col = QVBoxLayout(self)
-        col.setContentsMargins(SHADOW + 10, SHADOW + 10, SHADOW + 10, SHADOW + 10)
+        col.setContentsMargins(SHADOW + 12, SHADOW + 10, SHADOW + 12, SHADOW + 12)
         col.setSpacing(10)
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(2)
         self._swatches: list[Swatch] = []
         group = QButtonGroup(self)
-        for i, c in enumerate(PALETTE):
-            s = Swatch(c, self)
-            s.clicked.connect(lambda _=False, sw=s: self.color_changed.emit(sw.color))
-            group.addButton(s)
-            grid.addWidget(s, i // 5, i % 5)
-            self._swatches.append(s)
+        colors = list(palette or PALETTE) + PALETTE[len(palette or []):]
+        for i, c in enumerate(colors[:len(PALETTE)]):
+            sw = Swatch(c, self)
+            sw.clicked.connect(lambda _=False, k=i: self._choose_swatch(k))
+            sw.edit_requested.connect(lambda k=i: self._start_edit(k))
+            group.addButton(sw)
+            grid.addWidget(sw, i // 5, i % 5)
+            self._swatches.append(sw)
         col.addLayout(grid)
+
+        tools = QHBoxLayout()
+        tools.setSpacing(4)
+        self.pipette = IconButton("pipette", "Пипетка — взять цвет со скриншота  (I)", self)
+        self.pipette.clicked.connect(self.pick_requested)
+        self.more = IconButton("palette", "Любой цвет", self, checkable=True)
+        self.more.toggled.connect(self._show_picker)
+        self.hex = QLineEdit(self)
+        self.hex.setMaxLength(7)
+        self.hex.setFixedWidth(84)
+        self.hex.setPlaceholderText("#RRGGBB")
+        self.hex.editingFinished.connect(self._on_hex)
+        tools.addWidget(self.pipette)
+        tools.addWidget(self.more)
+        tools.addStretch(1)
+        tools.addWidget(self.hex)
+        col.addLayout(tools)
+
+        self.picker = QWidget(self)
+        pk = QVBoxLayout(self.picker)
+        pk.setContentsMargins(0, 0, 0, 0)
+        pk.setSpacing(8)
+        self.field = ColorField(self.picker)
+        self.hue = HueBar(self.picker)
+        self.field.changed.connect(lambda c: self._apply(c, from_picker=True))
+        self.hue.changed.connect(self.field.set_hue)
+        pk.addWidget(self.field)
+        pk.addWidget(self.hue)
+        self.picker.hide()
+        col.addWidget(self.picker)
+
+        self.hint = QLabel(HINT_DEFAULT, self)
+        self.hint.setWordWrap(True)
+        self.hint.setObjectName("Hint")
+        col.addWidget(self.hint)
 
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -287,16 +356,97 @@ class StylePopup(Panel):
         row.addWidget(self.slider, 1)
         row.addWidget(self.value)
         col.addLayout(row)
+        self.setFixedWidth(self.field.width() + 2 * (SHADOW + 12))
         self.adjustSize()
         self.hide()
 
+    # --- палитра -----------------------------------------------------------
+    def palette(self) -> list[str]:
+        return [sw.color.name().upper() for sw in self._swatches]
+
+    def _choose_swatch(self, i: int) -> None:
+        self._stop_edit()
+        self._apply(QColor(self._swatches[i].color))
+
+    def _start_edit(self, i: int) -> None:
+        """ПКМ по кружку: следующий выбранный цвет (поле, HEX, пипетка) заменит его."""
+        self._stop_edit()
+        self._edit_index = i
+        self._swatches[i].editing = True
+        self._swatches[i].update()
+        self.hint.setText(HINT_EDIT)
+        self.more.setChecked(True)
+        self._apply(QColor(self._swatches[i].color))
+
+    def _stop_edit(self) -> None:
+        if self._edit_index is not None:
+            self._swatches[self._edit_index].editing = False
+            self._swatches[self._edit_index].update()
+        self._edit_index = None
+        self.hint.setText(HINT_DEFAULT)
+
+    # --- выбор цвета -------------------------------------------------------
+    def apply_color(self, c: QColor) -> None:
+        """Цвет извне — например, с пипетки."""
+        self._apply(QColor(c))
+
+    def _apply(self, c: QColor, from_picker: bool = False) -> None:
+        if not c.isValid():
+            return
+        if self._edit_index is not None:
+            sw = self._swatches[self._edit_index]
+            sw.color = QColor(c)
+            sw.update()
+            self.palette_changed.emit(self.palette())
+        self._set_color_ui(c, update_field=not from_picker)
+        self.color_changed.emit(QColor(c))
+
+    def _set_color_ui(self, c: QColor, update_field: bool = True) -> None:
+        self._color = QColor(c)
+        if not self.hex.hasFocus():
+            self.hex.setText(c.name().upper())
+        if update_field:
+            self.field.set_color(c)
+            self.hue.set_hue(c.hsvHueF())
+        for sw in self._swatches:
+            sw.setChecked(sw.color.rgb() == c.rgb())
+
+    def _on_hex(self) -> None:
+        text = self.hex.text().strip()
+        if text and not text.startswith("#"):
+            text = "#" + text
+        c = QColor(text)
+        if c.isValid() and len(text) in (4, 7):
+            self._apply(c)
+        else:
+            self.hex.setText(self._color.name().upper())
+        if self.parentWidget():
+            self.parentWidget().setFocus()  # горячие клавиши снова у оверлея
+
+    def _show_picker(self, on: bool) -> None:
+        self.picker.setVisible(on)
+        self.layout().activate()   # пересчитать высоту сразу, до перестановки панели
+        self.adjustSize()
+        self.resized.emit()
+
+    def hide_for_picking(self) -> None:
+        """Прячемся на время пипетки, но помним, какой кружок палитры редактируется."""
+        self._hold_edit = True
+        self.hide()
+
+    def hideEvent(self, e) -> None:
+        if not self._hold_edit:
+            self._stop_edit()
+        self._hold_edit = False
+        super().hideEvent(e)
+
+    # --- толщина -----------------------------------------------------------
     def _on_slider(self, v: int) -> None:
         self.value.setText(str(v))
         self.width_changed.emit(v)
 
     def set_style(self, color: QColor, width: int) -> None:
-        for s in self._swatches:
-            s.setChecked(s.color == color)
+        self._set_color_ui(QColor(color))
         self.slider.blockSignals(True)
         self.slider.setValue(width)
         self.slider.blockSignals(False)
@@ -304,10 +454,23 @@ class StylePopup(Panel):
 
     def apply_theme(self, t: Tokens) -> None:
         super().apply_theme(t)
-        for s in self._swatches:
-            s.ring = QColor(t.accent)
+        for sw in self._swatches:
+            sw.ring = QColor(t.accent)
+            # тёмный кружок на тёмной панели не должен теряться
+            sw.outline = QColor(255, 255, 255, 90) if t.dark else QColor(0, 0, 0, 50)
+        self.pipette.apply_theme(t)
+        self.more.apply_theme(t)
+        accent = QColor(t.accent)
         self.setStyleSheet(f"""
             QLabel {{ color: {t.muted}; font-size: 12px; background: transparent; }}
+            QLabel#Hint {{ font-size: 11px; }}
+            QToolButton {{ border: none; border-radius: 8px; background: transparent; }}
+            QToolButton:hover {{ background: {t.hover}; }}
+            QToolButton:checked {{ background: rgba({accent.red()},{accent.green()},{accent.blue()},0.16); }}
+            QLineEdit {{ background: {t.raised}; color: {t.text}; border: 1px solid {t.border};
+                         border-radius: 7px; padding: 4px 6px; font-family: monospace; font-size: 12px;
+                         selection-background-color: {t.accent}; }}
+            QLineEdit:focus {{ border-color: {t.accent}; }}
             QSlider::groove:horizontal {{ height: 4px; background: {t.border}; border-radius: 2px; }}
             QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 2px; }}
             QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
