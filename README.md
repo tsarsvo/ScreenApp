@@ -1,133 +1,109 @@
-<p align="center"><img src="kadr/resources/logo.png" width="96" alt="Kadr"></p>
+<div align="center">
 
-<h1 align="center">Kadr</h1>
-<p align="center">Минималистичное кроссплатформенное приложение для скриншотов — аналог Lightshot.</p>
+<img src="kadr/resources/logo.png" width="112" alt="Kadr">
 
-<p align="center">
-  <a href="https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe"><b>⬇ Скачать для Windows (Kadr-Setup.exe)</b></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/tsarsvo/ScreenApp/releases/latest">Все версии</a>
-</p>
+# Kadr
 
-<p align="center">
-  <img src="docs/overlay-light.png" width="49%"> <img src="docs/overlay-dark.png" width="49%">
-</p>
+**Скриншоты и повтор экрана — быстро, красиво, без лишнего.**
+<br>Минималистичный аналог Lightshot с рисованием, undo/redo и записью последних минут экрана.
 
-## Возможности
+<br>
 
-- **Весь экран по горячей клавише**: файл сразу сохраняется в выбранную папку, без промежуточных окон. Если мониторов несколько, они склеиваются в один снимок в том же расположении, что и на рабочем столе.
-- **Выделение области**: плавное затемнение фона вокруг выделения, ручки для изменения размера, перемещение, размер в пикселях. Простой клик выделяет весь экран.
-- **Инструменты рисования**: кисть, стрелка, прямоугольник, овал, текст. Цвет выбирается из палитры, толщина — слайдером или **Ctrl + колесо мыши**. С **Shift** получаются квадрат/круг и стрелка с шагом 45°.
-- **Undo / Redo**: кнопки «Назад»/«Вперёд» на панели, **Ctrl+Z**, **Ctrl+Y** / **Ctrl+Shift+Z**.
-- **Повтор экрана**: запись экрана со звуком идёт в фоне, по горячей клавише (`Alt+Shift+R`) сохраняются последние 1–5 минут в `.mp4`. Звук системы и микрофон (выбирается в настройках). Кодирование видеокартой: NVIDIA NVENC, AMD AMF или Intel Quick Sync.
-- **Результат**: копирование в буфер (**Ctrl+C** / **Enter** / двойной клик) или сохранение в папку (**Ctrl+S**).
-- **Настройки**: горячие клавиши, папка, формат PNG / JPG / WEBP с качеством, курсор на снимке, автозапуск, тема.
-- **Значок в трее** (на macOS — в строке меню): клик открывает настройки, меню — захват, папку и выход.
-- Светлая и тёмная темы (по умолчанию — как в системе), тонкие иконки в едином стиле и собственный логотип.
+<a href="https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe">
+  <img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%B4%D0%BB%D1%8F%20Windows-Kadr--Setup.exe-3F6BFF?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать для Windows" height="42">
+</a>
 
-<p align="center">
-  <img src="docs/settings-light.png" width="40%"> <img src="docs/settings-dark.png" width="40%">
-</p>
+<sub><a href="https://github.com/tsarsvo/ScreenApp/releases/latest">Все версии и портативная сборка</a> · Windows 10/11 · бесплатно</sub>
+
+<br><br>
+
+<a href="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml"><img src="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml/badge.svg" alt="Windows build"></a>
+<img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey?logo=qt&logoColor=white" alt="Платформы">
+<img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+<img src="https://img.shields.io/badge/PySide6-Qt%206-41CD52?logo=qt&logoColor=white" alt="PySide6">
+
+<br><br>
+
+<img src="docs/overlay-light.png" width="49%" alt="Выделение и рисование — светлая тема">
+<img src="docs/overlay-dark.png" width="49%" alt="Выделение и рисование — тёмная тема">
+
+</div>
 
 ---
 
-## Установка на Windows (как обычная программа)
+## ✨ Возможности
 
-**Способ 1 — установщик (рекомендуется).** Python не нужен.
-1. Скачайте **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)** — последняя версия из раздела [Releases](https://github.com/tsarsvo/ScreenApp/releases).
-2. Запустите **`Kadr-Setup.exe`**. Права администратора не нужны.
-3. Готово: ярлык **Kadr** на рабочем столе и в меню «Пуск», запуск двойным кликом, значок появится в трее возле часов.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-В релизе также лежит `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
+### 📸 Скриншоты
+- **Весь экран одной клавишей**: файл сразу сохраняется в папку, без лишних окон
+- **Выделение области** с плавным затемнением фона, ручками размера и размером в пикселях
+- **Несколько мониторов** с разным масштабом (100% и 200% одновременно)
+- Результат **копируется в буфер** или **сохраняется** в PNG / JPG / WEBP
 
-> Windows SmartScreen может предупредить о «неизвестном издателе», потому что сборка не подписана сертификатом. Нажмите «Подробнее» → «Выполнить в любом случае».
+</td>
+<td width="50%" valign="top">
 
-**Способ 2 — из исходников.** Нужен [Python 3.10+](https://www.python.org/downloads/) (при установке отметьте *Add python.exe to PATH*). Скачайте репозиторий (Code → Download ZIP), распакуйте и **дважды кликните `install_windows.bat`**. Он сам поставит зависимости, скачает FFmpeg, создаст ярлыки «Kadr» на рабочем столе и в «Пуске» и запустит программу. Дальше — только ярлыком.
+### 🖌 Рисование
+- Кисть, стрелка, прямоугольник, овал, **текст**
+- Палитра цветов, толщина — слайдером или **Ctrl + колесо**
+- **Shift** — ровный квадрат, круг и стрелка под 45°
+- **Undo / Redo** — кнопками или `Ctrl+Z` / `Ctrl+Y`
 
-## 1. Архитектура и стек
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-**Python 3.10+ и PySide6 (Qt 6)**
+### ⏪ Повтор экрана
+- Экран и звук пишутся в фоне, по `Alt+Shift+R` сохраняются **последние 1–5 минут** в `.mp4`
+- Звук системы и **микрофон по выбору**
+- Кодирование **видеокартой**: NVIDIA, AMD, Intel
+- Сохранение за 1–2 секунды, на диске не больше нужных минут
 
-| Требование | Как решается | Почему не альтернатива |
-|---|---|---|
-| Кроссплатформенность | Qt работает нативно на Windows, macOS и Linux | C#/WPF — только Windows |
-| Скорость и лёгкость | Qt рисует нативно, запуск за доли секунды, ~60–80 МБ ОЗУ | Electron тянет Chromium: 150–300 МБ и медленный холодный старт |
-| Захват экрана | `QScreen.grabWindow()` с корректным HiDPI; запасной вариант — `mss` (BitBlt / CoreGraphics / XShm) | — |
-| Глобальные хоткеи | Windows: нативный `RegisterHotKey` (без хуков и прав, сочетание «съедается»). macOS/Linux: `pynput` | В Electron есть `globalShortcut`, но всё остальное тяжелее |
-| Рисование, прозрачность, анимации | `QPainter` с антиалиасингом, `QPropertyAnimation` | — |
-| Трей, буфер обмена, диалоги | Всё есть в Qt | — |
-| Запись повтора | Вложенный FFmpeg: захват `ddagrab` (Desktop Duplication, кадры сразу на GPU) + аппаратный кодер; звук системы — WASAPI loopback (`PyAudioWPatch`), микрофон — DirectShow | Кодировать видео из Python слишком медленно |
+</td>
+<td width="50%" valign="top">
 
-### Как устроено
+### ⚙️ Удобство
+- Живёт в **трее**, клик по значку открывает настройки
+- **Светлая и тёмная** тема, по умолчанию как в системе
+- **Автозапуск** при входе в систему
+- Настраиваемые горячие клавиши, курсор на снимке — по желанию
 
-```
-               ┌──────────── KadrApp (app.py) ────────────┐
- глобальный    │  трей · одна копия (QLocalServer) · тема │
- хоткей ──────▶│  HotkeyManager ──▶ capture_full / region │
-               └──────┬───────────────────────┬───────────┘
-                      │ full                   │ region
-            grab_full_desktop()           grab_screens()
-                      │                        │
-                 save_image()          CaptureSession
-                                  (по Overlay на каждый монитор)
-                                        │
-                        Overlay: выделение, фигуры, History
-                        Toolbar + StylePopup (дочерние виджеты)
-                                        │
-                              render_selection() → QImage
-                                  │                 │
-                          copy_to_clipboard    save_image
-```
+</td>
+</tr>
+</table>
 
-Ключевые решения:
+<div align="center">
+<img src="docs/settings-light.png" width="38%" alt="Настройки — светлая тема">
+&nbsp;&nbsp;
+<img src="docs/settings-dark.png" width="38%" alt="Настройки — тёмная тема">
+</div>
 
-- **Отдельный оверлей на каждый монитор.** Так корректно работают экраны с разным масштабом (например, 100% и 200%). Выделение на одном мониторе сбрасывает выделение на остальных.
-- **Двойная система координат.** Интерфейс работает в логических пикселях, снимок хранится в физических. При экспорте фрагмент вырезается в физических пикселях, а фигуры перерисовываются в том же масштабе, поэтому результат на Retina/4K остаётся чётким.
-- **Панели — дочерние виджеты оверлея**, а не отдельные окна. Они не отбирают фокус, не прячутся за окном «поверх всех» и не требуют прав на новые окна.
-- **Изменения в настройках применяются сразу** (записываются в JSON атомарно).
-- **Одна копия приложения**: повторный запуск передаёт команду уже запущенному процессу. Например, `main.py --region` можно повесить на системное сочетание клавиш.
+---
 
-## 2. Структура проекта
+## 🚀 Установка
 
-```
-ScreenApp/
-├── main.py                     # точка входа: python main.py [--region|--full|--settings]
-├── requirements.txt
-├── kadr/
-│   ├── __init__.py             # имя, id, версия
-│   ├── app.py                  # контроллер: трей, одна копия, хоткеи, запуск захвата
-│   ├── config.py               # Settings (dataclass) + хранение в JSON
-│   ├── capture.py              # захват экранов, склейка мониторов, отрисовка курсора
-│   ├── hotkeys.py              # модель сочетания + backend'ы Win32 / pynput
-│   ├── autostart.py            # автозапуск: реестр / LaunchAgent / XDG autostart
-│   ├── saver.py                # PNG/JPG/WEBP, уникальные имена, буфер обмена
-│   ├── theme.py                # токены светлой/тёмной темы, QSS, системная тема
-│   ├── icons.py                # тонкие SVG-иконки + логотип
-│   ├── replay/
-│   │   ├── recorder.py         # буфер повтора: кольцо сегментов, выбор кодера, сохранение
-│   │   ├── ffmpeg.py           # поиск FFmpeg, проверка кодеров, список микрофонов
-│   │   └── audio_win.py        # звук системы через WASAPI loopback
-│   ├── bin/                    # сюда кладётся ffmpeg.exe (scripts/fetch_ffmpeg.py)
-│   ├── overlay/
-│   │   ├── session.py          # оверлеи на все мониторы, общий результат
-│   │   ├── overlay.py          # выделение, рисование, клавиатура, отрисовка, экспорт
-│   │   ├── shapes.py           # кисть, стрелка, прямоугольник, овал, текст
-│   │   ├── history.py          # undo / redo
-│   │   └── toolbar.py          # плавающая панель и панель «цвет + толщина»
-│   ├── ui/
-│   │   ├── settings_window.py  # окно настроек
-│   │   └── widgets.py          # ToggleSwitch, HotkeyEdit, Segmented
-│   └── resources/              # logo.svg / .png / .ico (генерирует scripts/build.py)
-├── scripts/build.py            # сборка Kadr.exe + установщик (PyInstaller + Inno Setup)
-├── scripts/fetch_ffmpeg.py     # скачивание FFmpeg (LGPL) с проверкой контрольной суммы
-├── installer/kadr.iss          # сценарий установщика Inno Setup
-├── install_windows.bat         # установка из исходников двойным кликом
-├── .github/workflows/windows.yml  # автосборка установщика на GitHub
-├── tests/test_core.py          # тесты (pytest, работают без дисплея)
-└── docs/                       # скриншоты для README
-```
+1. Скачайте **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)**.
+2. Запустите его. Права администратора не нужны.
+3. Готово: ярлык **Kadr** появится на рабочем столе и в меню «Пуск», значок — в трее возле часов.
 
-## 3. Запуск для разработки
+> [!TIP]
+> Не хотите устанавливать? В [релизе](https://github.com/tsarsvo/ScreenApp/releases/latest) есть **`Kadr-portable.zip`**: распакуйте его и запустите `Kadr.exe`.
+
+> [!NOTE]
+> Windows SmartScreen может предупредить о «неизвестном издателе», потому что программа не подписана платным сертификатом. Нажмите **«Подробнее» → «Выполнить в любом случае»**.
+
+<details>
+<summary><b>Установка из исходников (для разработчиков)</b></summary>
+
+<br>
+
+**Windows, двойным кликом.** Установите [Python 3.10+](https://www.python.org/downloads/) с галочкой *Add python.exe to PATH*. Скачайте репозиторий (**Code → Download ZIP**), распакуйте и дважды кликните **`install_windows.bat`**. Скрипт сам поставит зависимости, скачает FFmpeg, создаст ярлыки и запустит программу.
+
+**Вручную, на любой ОС:**
 
 ```bash
 git clone https://github.com/tsarsvo/ScreenApp.git && cd ScreenApp
@@ -135,89 +111,203 @@ python -m venv .venv
 # Windows:      .venv\Scripts\activate
 # macOS/Linux:  source .venv/bin/activate
 pip install -r requirements.txt
-python main.py
+python main.py            # --region | --full | --settings | --save-replay
 ```
 
-При первом запуске откроется окно настроек. Дальше приложение работает в трее.
+</details>
+
+---
+
+## ⌨️ Горячие клавиши
 
 | Действие | Windows / Linux | macOS |
+|:--|:--:|:--:|
+| Выделить область | <kbd>PrtSc</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>2</kbd> |
+| Весь экран → сразу в файл | <kbd>Shift</kbd>+<kbd>PrtSc</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd> |
+| Сохранить повтор | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | — |
+
+Все три сочетания меняются в настройках: нажмите на кнопку и затем нужное сочетание.
+
+**На выделенной области:**
+
+| | | | |
+|:--|:--|:--|:--|
+| <kbd>V</kbd> выделение | <kbd>P</kbd> кисть | <kbd>A</kbd> стрелка | <kbd>R</kbd> прямоугольник |
+| <kbd>E</kbd> овал | <kbd>T</kbd> текст | <kbd>Ctrl</kbd>+колесо — толщина | <kbd>Shift</kbd> — ровные фигуры |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd> назад | <kbd>Ctrl</kbd>+<kbd>Y</kbd> вперёд | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Enter</kbd> копировать | <kbd>Ctrl</kbd>+<kbd>S</kbd> сохранить |
+
+<kbd>Esc</kbd> или правая кнопка мыши закрывают выделение. Простой клик без протяжки выделяет весь экран, двойной клик по выделению копирует его. На macOS вместо <kbd>Ctrl</kbd> используется <kbd>Cmd</kbd>.
+
+<details>
+<summary><b>Если что-то не работает</b></summary>
+
+<br>
+
+- **Windows 11: <kbd>PrtSc</kbd> открывает «Ножницы».** Отключите это в *Параметры → Специальные возможности → Клавиатура → «Использовать PrtSc для открытия захвата экрана»* или назначьте в Kadr другое сочетание.
+- **macOS.** Выдайте разрешения **Запись экрана** и **Универсальный доступ** в *Системные настройки → Конфиденциальность и безопасность* и перезапустите приложение.
+- **Linux.** Полностью поддерживается X11. На Wayland система не даёт приложениям перехватывать клавиши и снимать экран: используйте сессию X11 или назначьте в настройках рабочего стола команду `main.py --region`.
+- **Повтор не сохраняется.** Проверьте в настройках строку под тумблером «Записывать повтор»: там видно, идёт ли запись и какой кодер используется.
+
+</details>
+
+---
+
+## ⏪ Как работает повтор экрана
+
+Включите тумблер **«Записывать повтор»** в настройках (по умолчанию он выключен). Пока запись идёт, на значке в трее горит красная точка.
+
+```
+ экран + звук ──▶ FFmpeg ──▶ [5с][5с][5с][5с]…  ◀── кольцо: старые куски перезаписываются
+                                         │
+                       Alt+Shift+R ──────┘──▶ склейка без перекодирования ──▶ Kadr_Replay_….mp4
+```
+
+- **Место на диске не растёт**: во временной папке лежат только последние минуты, около 250–300 МБ для 5 минут в 1080p.
+- **Сохранение за секунду-две**: куски склеиваются без перекодирования, длина — выбранные минуты плюс до 5 секунд.
+- **Кодер выбирается сам**: NVIDIA NVENC → AMD AMF → Intel Quick Sync → Media Foundation (есть в любой Windows). Если вариант не запустился, берётся следующий.
+- **Настройки**: длительность 1–5 минут, 30 или 60 fps, разрешение (исходное / 1080p / 720p), монитор, звук системы, микрофон и выбор устройства.
+
+---
+
+## 🛠 Для разработчиков
+
+<details>
+<summary><b>Стек и почему именно он</b></summary>
+
+<br>
+
+**Python 3.10+ и PySide6 (Qt 6)**
+
+| Задача | Решение | Почему не альтернатива |
 |---|---|---|
-| Выделить область | `PrtSc` | `Ctrl+Shift+2` |
-| Весь экран → сразу в файл | `Shift+PrtSc` | `Ctrl+Shift+1` |
-| Сохранить повтор | `Alt+Shift+R` | — |
+| Кроссплатформенность | Qt работает нативно на Windows, macOS и Linux | C#/WPF — только Windows |
+| Скорость и лёгкость | Нативная отрисовка, запуск за доли секунды, ~60–80 МБ ОЗУ | Electron тянет Chromium: 150–300 МБ и медленный старт |
+| Захват экрана | `QScreen.grabWindow()` с HiDPI, запасной вариант — `mss` | — |
+| Глобальные хоткеи | Windows: `RegisterHotKey` без хуков и прав. macOS/Linux: `pynput` | — |
+| Рисование и анимации | `QPainter` с антиалиасингом, `QPropertyAnimation` | — |
+| Повтор экрана | Вложенный FFmpeg: `ddagrab` (кадры сразу на GPU) + аппаратный кодер; звук системы — WASAPI loopback, микрофон — DirectShow | Кодировать видео из Python слишком медленно |
 
-Сочетания можно поменять в настройках: нажмите на кнопку и затем нужное сочетание. `Esc` отменяет запись, `Backspace` отключает хоткей.
+</details>
 
-**Внутри оверлея:** `V` выделение/перемещение · `P` кисть · `A` стрелка · `R` прямоугольник · `E` овал · `T` текст · `Ctrl+колесо` толщина · `Ctrl+Z` / `Ctrl+Y` · `Ctrl+C` или `Enter` копировать · `Ctrl+S` сохранить · `Esc` или ПКМ закрыть. В режиме «Текст»: `Enter` завершает ввод, `Shift+Enter` переносит строку, `Ctrl+V` вставляет текст. На macOS вместо `Ctrl` используется `Cmd`.
+<details>
+<summary><b>Архитектура</b></summary>
 
-### Особенности платформ
+<br>
 
-- **Windows 11.** Если `PrtSc` открывает системную «Ножницы», выключите это: *Параметры → Специальные возможности → Клавиатура → «Использовать PrtSc для открытия захвата экрана»*. Если не хотите, назначьте в Kadr другое сочетание.
-- **macOS.** Нужны два разрешения в *Системные настройки → Конфиденциальность и безопасность*: **Запись экрана** (иначе на снимке будут только обои) и **Универсальный доступ / Мониторинг ввода** (для глобальных хоткеев). Выдайте их терминалу или собранному `Kadr.app` и перезапустите приложение.
-- **Linux.** Полностью поддерживается X11. На Wayland программы не могут перехватывать глобальные клавиши и читать экран напрямую. Используйте сессию X11 или (частично) привяжите в настройках DE сочетание к команде `python /путь/main.py --region`. В GNOME для значка в трее нужно расширение *AppIndicator*. Для pynput может понадобиться `sudo apt install python3-xlib`.
+```
+               ┌──────────── KadrApp (app.py) ────────────┐
+ глобальный    │  трей · одна копия (QLocalServer) · тема │
+ хоткей ──────▶│  HotkeyManager ──▶ capture / replay      │
+               └──────┬──────────────┬───────────┬────────┘
+                      │ full         │ region    │ replay
+            grab_full_desktop()  grab_screens()  ReplayRecorder
+                      │              │           (FFmpeg, кольцо сегментов)
+                 save_image()   CaptureSession
+                             (Overlay на каждый монитор)
+                                     │
+                     Overlay: выделение, фигуры, History
+                     Toolbar + StylePopup (дочерние виджеты)
+                                     │
+                           render_selection() → QImage
+```
 
-### Тесты и сборка
+- **Отдельный оверлей на каждый монитор**: корректно работают экраны с разным масштабом.
+- **Две системы координат**: интерфейс в логических пикселях, снимок в физических, поэтому результат на Retina/4K остаётся чётким.
+- **Панели — дочерние виджеты оверлея**, а не отдельные окна: не отбирают фокус и не прячутся за окном «поверх всех».
+- **Одна копия приложения**: повторный запуск передаёт команду (`--region`, `--save-replay` и т.д.) уже работающему процессу.
+
+</details>
+
+<details>
+<summary><b>Структура проекта</b></summary>
+
+<br>
+
+```
+ScreenApp/
+├── main.py                        точка входа
+├── kadr/
+│   ├── app.py                     трей, одна копия, хоткеи, запуск захвата
+│   ├── config.py                  настройки → JSON
+│   ├── capture.py                 захват экранов, склейка мониторов, курсор
+│   ├── hotkeys.py                 горячие клавиши (Win32 / pynput)
+│   ├── autostart.py               автозапуск: реестр / LaunchAgent / XDG
+│   ├── saver.py                   PNG / JPG / WEBP, буфер обмена
+│   ├── theme.py, icons.py         темы, тонкие SVG-иконки, логотип
+│   ├── overlay/                   выделение, фигуры, undo/redo, панель инструментов
+│   ├── replay/                    буфер повтора: FFmpeg, кодеры, звук WASAPI
+│   ├── ui/                        окно настроек и виджеты
+│   └── resources/                 логотип .svg / .png / .ico
+├── scripts/
+│   ├── build.py                   Kadr.exe + установщик (PyInstaller + Inno Setup)
+│   └── fetch_ffmpeg.py            загрузка FFmpeg (LGPL) с проверкой sha256
+├── installer/kadr.iss             сценарий установщика
+├── install_windows.bat            установка из исходников двойным кликом
+├── tests/                         pytest, работают без дисплея
+└── .github/workflows/windows.yml  автосборка и релизы
+```
+
+</details>
+
+<details>
+<summary><b>Тесты, сборка и выпуск версии</b></summary>
+
+<br>
 
 ```bash
-pip install pytest
-QT_QPA_PLATFORM=offscreen python -m pytest -q      # 22 теста, дисплей не нужен
+pip install pytest pyinstaller
+QT_QPA_PLATFORM=offscreen python -m pytest -q    # 22 теста, дисплей не нужен
 
-pip install pyinstaller
-python scripts/fetch_ffmpeg.py                       # Windows: FFmpeg в kadr/bin
-python scripts/build.py                              # → dist/Kadr/Kadr.exe, dist/Kadr-Setup.exe, dist/Kadr-portable.zip
+python scripts/fetch_ffmpeg.py                    # Windows: FFmpeg в kadr/bin
+python scripts/build.py                           # dist/Kadr-Setup.exe и dist/Kadr-portable.zip
 ```
 
-## Повтор экрана — как это работает
-
-- Включается тумблером **«Записывать повтор»** в настройках (по умолчанию выключен). Пока запись идёт, на значке в трее горит красная точка.
-- FFmpeg пишет экран короткими сегментами по 5 секунд **по кругу**: на диске (во временной папке) всегда лежит только последние N минут — около 250–300 МБ для 5 минут 1080p, объём не растёт.
-- По `Alt+Shift+R` (или «Сохранить повтор» в меню трея, или `Kadr.exe --save-replay`) последние сегменты склеиваются **без перекодирования** — файл `Kadr_Replay_<дата>.mp4` появляется в папке скриншотов за секунду-две. Длина — выбранные минуты плюс до 5 секунд.
-- Кодер выбирается автоматически: NVIDIA NVENC → AMD AMF → Intel Quick Sync → Media Foundation (программный, есть в любой Windows). Какой используется — видно в настройках. Если вариант не запустился, приложение пробует следующий.
-- Настройки: длительность 1–5 мин, 30/60 fps, разрешение (исходное / 1080p / 720p), монитор, звук системы, микрофон и выбор конкретного микрофона.
-- FFmpeg распространяется в LGPL-сборке как отдельная программа; текст лицензии лежит рядом с `ffmpeg.exe` (`FFMPEG-LICENSE.txt`).
-
-## 4. Автозапуск на Windows / macOS / Linux
-
-Галочка «Запускать при входе в систему» вызывает `kadr/autostart.py`. Модуль прописывает в автозагрузку ОС команду запуска текущей копии: путь к `.exe`/бинарнику для сборки или `pythonw main.py` при запуске из исходников. Если галочка включена, запись обновляется при каждом старте, поэтому переезд папки ничего не ломает. Права администратора ни на одной ОС не нужны.
-
-### Windows — ключ реестра `Run`
-```
-HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
-    Kadr = "C:\...\pythonw.exe" "C:\...\main.py"      (или "C:\...\Kadr.exe")
-```
-Пишется через стандартный модуль `winreg`. Используется `pythonw.exe`, поэтому окно консоли не появляется. Запись видна в *Диспетчер задач → Автозагрузка*, там же её можно отключить.
-
-### macOS — LaunchAgent
-Файл `~/Library/LaunchAgents/app.kadr.screenshot.plist`:
-```xml
-<dict>
-  <key>Label</key><string>app.kadr.screenshot</string>
-  <key>ProgramArguments</key><array><string>/path/to/python</string><string>/path/to/main.py</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>ProcessType</key><string>Interactive</string>
-</dict>
-```
-`launchd` запускает агента при входе пользователя. Для подписанного `.app`, который распространяется через App Store, лучше использовать `SMAppService.mainApp.register()` (macOS 13+) через pyobjc. Для обычного распространения LaunchAgent проще и надёжнее.
-
-### Linux — XDG Autostart
-Файл `~/.config/autostart/kadr.desktop` (учитывается `$XDG_CONFIG_HOME`):
-```ini
-[Desktop Entry]
-Type=Application
-Name=Kadr
-Exec="/usr/bin/python3" "/path/to/main.py"
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=2
-```
-Этот стандарт понимают GNOME, KDE Plasma, XFCE, Cinnamon, MATE и LXQt. Задержка в 2 секунды нужна, чтобы трей успел загрузиться. Для оконных менеджеров без поддержки XDG (i3, bspwm) добавьте `main.py` в их конфиг, например `exec` в i3.
-
-## Выпуск новой версии
-
-Номер версии берётся из git-тега, править код не нужно:
+**Новая версия** выпускается одним тегом. Номер берётся из тега, править код не нужно:
 
 ```bash
 git checkout main && git pull
 git tag v1.1.0 && git push origin v1.1.0
 ```
 
-GitHub Actions соберёт установщик и опубликует релиз **Kadr v1.1.0** с `Kadr-Setup.exe` и `Kadr-portable.zip`. Ссылка «Скачать» в начале README всегда ведёт на последний релиз.
+GitHub Actions соберёт установщик и опубликует релиз **Kadr v1.1.0**. Кнопка «Скачать» в начале README всегда ведёт на последний релиз.
+
+</details>
+
+<details>
+<summary><b>Как устроен автозапуск на Windows / macOS / Linux</b></summary>
+
+<br>
+
+Галочка «Запускать при входе в систему» прописывает команду запуска в автозагрузку ОС. Права администратора не нужны. Если галочка включена, запись обновляется при каждом старте, поэтому перенос папки с программой ничего не ломает.
+
+**Windows** — значение в реестре (видно в *Диспетчер задач → Автозагрузка*):
+```
+HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
+    Kadr = "C:\...\Kadr.exe"
+```
+
+**macOS** — LaunchAgent `~/Library/LaunchAgents/app.kadr.screenshot.plist` с `RunAtLoad`:
+```xml
+<dict>
+  <key>Label</key><string>app.kadr.screenshot</string>
+  <key>ProgramArguments</key><array><string>/path/to/Kadr</string></array>
+  <key>RunAtLoad</key><true/>
+</dict>
+```
+
+**Linux** — XDG Autostart `~/.config/autostart/kadr.desktop` (GNOME, KDE, XFCE, Cinnamon, MATE, LXQt):
+```ini
+[Desktop Entry]
+Type=Application
+Name=Kadr
+Exec="/usr/bin/python3" "/path/to/main.py"
+X-GNOME-Autostart-Delay=2
+```
+
+</details>
+
+---
+
+<div align="center">
+<sub>FFmpeg распространяется в LGPL-сборке как отдельная программа; текст лицензии лежит рядом с <code>ffmpeg.exe</code>.</sub>
+</div>
