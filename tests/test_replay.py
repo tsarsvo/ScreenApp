@@ -170,7 +170,8 @@ def test_restart_is_nonblocking_and_leaves_no_orphans(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="на macOS повтор экрана не поддерживается")
-def test_ffmpeg_child_dies_with_kadr(tmp_path):
+@pytest.mark.parametrize("attempt", range(3))  # гонка при запуске ловится не с первого раза
+def test_ffmpeg_child_dies_with_kadr(tmp_path, attempt):
     """Если Kadr убит принудительно, дочерний процесс (FFmpeg) не должен остаться «сиротой».
     Ребёнок пишет «пульс» в файл; после убийства родителя пульс должен прекратиться."""
     beat = tmp_path / "beat.txt"
