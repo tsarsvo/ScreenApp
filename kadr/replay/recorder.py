@@ -28,6 +28,7 @@ from PySide6.QtCore import QObject, QRect, Signal
 
 from .. import APP_NAME
 from . import ffmpeg as ff
+from .child import popen_tied
 
 SEG = 5                      # длина сегмента, секунд
 STARTUP_CHECK_S = 4.0        # сколько ждать, чтобы понять, что FFmpeg стартовал нормально
@@ -171,22 +172,55 @@ class ReplayRecorder(QObject):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._life = threading.Lock()     # старт/стоп выполняются строго по очереди
+        self._generation = 0              # номер последнего запроса: устаревшие запросы пропускаются
         self.encoder: str | None = None
         self.running = False
+        self.cache_dir: Path | None = None  # где хранить результат проверки кодеров
 
     # ------------------------------------------------------------ lifecycle
+    # start()/stop() не блокируют интерфейс: остановка FFmpeg и ожидание потока
+    # (до нескольких секунд) выполняются в фоне, строго по очереди.
     def start(self, opts: ReplayOptions) -> None:
-        self.stop()
         self._opts = opts
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, args=(opts, self._stop), daemon=True)
-        self._thread.start()
+        self._generation += 1
+        gen = self._generation
+        self._stop.set()
+        threading.Thread(target=self._restart, args=(opts, gen), daemon=True).start()
 
-    def stop(self) -> None:
+    def _restart(self, opts: ReplayOptions, gen: int) -> None:
+        with self._life:
+            if gen != self._generation:
+                return  # пока ждали очереди, пришёл более новый запрос
+            self._stop_blocking()
+            stop = threading.Event()
+            self._stop = stop
+            self._thread = threading.Thread(target=self._run, args=(opts, stop), daemon=True)
+            self._thread.start()
+
+    def stop(self, wait: bool = False) -> None:
+        """wait=True — дождаться полной остановки (при выходе из программы)."""
+        self._generation += 1
+        gen = self._generation
+        self._stop.set()
+        if wait:
+            with self._life:
+                self._stop_blocking(join_timeout=3)  # при выходе долго не ждём: потоки фоновые
+            return
+
+        def work() -> None:
+            with self._life:
+                if gen == self._generation:
+                    self._stop_blocking()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _stop_blocking(self, join_timeout: float = 20) -> None:
         self._stop.set()
         self._kill()
         if self._thread and self._thread is not threading.current_thread():
-            self._thread.join(timeout=2)
+            # ждём в фоне, поэтому можно не торопиться: поток может проверять кодеры
+            self._thread.join(timeout=join_timeout)
         self._thread = None
         if self.running:
             self.running = False
@@ -216,8 +250,8 @@ class ReplayRecorder(QObject):
         if not exe:
             self.error.emit("FFmpeg не найден. Запустите scripts/fetch_ffmpeg.py или установите FFmpeg.")
             return
-        attempts = plan_attempts(ff.working_encoders(exe),
-                                 sys.platform == "win32" and ff.has_filter(exe, "ddagrab"))
+        encoders, has_dda = ff.probe(exe, self.cache_dir)
+        attempts = plan_attempts(encoders, sys.platform == "win32" and has_dda)
         if not attempts:
             self.error.emit("Не найден ни один рабочий видеокодер H.264")
             return
@@ -225,10 +259,16 @@ class ReplayRecorder(QObject):
         restarts = 0
         idx = 0
         last_err = ""
+        reprobed = False
         while not stop.is_set() and idx < len(attempts):
             ok, last_err = self._launch(exe, attempts[idx], opts, stop)
             if not ok:
                 idx += 1          # этот кодер/способ не завёлся — пробуем следующий
+                if idx == len(attempts) and not reprobed and not stop.is_set():
+                    # Всё отказало — возможно, сменился драйвер видеокарты и кэш устарел
+                    reprobed = True
+                    encoders, has_dda = ff.probe(exe, self.cache_dir, refresh=True)
+                    attempts, idx = plan_attempts(encoders, sys.platform == "win32" and has_dda), 0
                 continue
             self.encoder = attempts[idx].encoder
             if not self.running:
@@ -261,15 +301,27 @@ class ReplayRecorder(QObject):
         cmd = build_command(exe, attempt, opts, self.dir, audio_inputs)
         log = open(self.dir / "ffmpeg.log", "wb")
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if pump else subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL, stderr=log, creationflags=ff.NO_WINDOW)
+            # popen_tied: FFmpeg умрёт вместе с Kadr, даже если Kadr завершат принудительно
+            proc = popen_tied(cmd, stdin=subprocess.PIPE if pump else subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=log, creationflags=ff.NO_WINDOW)
         except OSError as exc:
             log.close()
             if pump:
                 pump.stop()
             return False, str(exc)
         with self._lock:
-            self._proc, self._pump = proc, pump
+            if stop.is_set():
+                # Пока запускались, нас уже остановили — не оставляем «сиротский» FFmpeg
+                orphan = True
+            else:
+                orphan = False
+                self._proc, self._pump = proc, pump
+        if orphan:
+            if pump:
+                pump.stop()
+            proc.kill()
+            log.close()
+            return False, ""
         if pump:
             pump.start(proc.stdin)
         deadline = time.monotonic() + STARTUP_CHECK_S

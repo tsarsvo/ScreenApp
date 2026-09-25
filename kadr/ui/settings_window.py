@@ -459,7 +459,8 @@ class SettingsWindow(QWidget):
         if box.clickedButton() is not yes:
             return
         if self.replay is not None:
-            self.replay.stop()
+            self.replay.stop(wait=True)
+        self.store.disable_saving()
         mode = uninstall.uninstall()
         if mode == "manual":
             folder = uninstall.app_dir()

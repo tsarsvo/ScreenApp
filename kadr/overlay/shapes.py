@@ -41,6 +41,11 @@ class Shape:
     def is_empty(self) -> bool:
         return False
 
+    def bounds(self) -> QRectF:
+        """Область, которую занимает фигура на экране (с запасом на толщину линии) —
+        чтобы перерисовывать только её, а не весь экран."""
+        return QRectF()
+
 
 @dataclass
 class PenStroke(Shape):
@@ -61,6 +66,12 @@ class PenStroke(Shape):
         path.lineTo(self.points[-1])
         p.drawPath(path)
 
+    def bounds(self) -> QRectF:
+        if not self.points:
+            return QRectF()
+        m = self.width + 2
+        return QPolygonF(self.points).boundingRect().adjusted(-m, -m, m, m)
+
 
 @dataclass
 class TwoPointShape(Shape):
@@ -72,6 +83,11 @@ class TwoPointShape(Shape):
 
     def is_empty(self) -> bool:
         return QLineF(self.start, self.end).length() < 3
+
+    def bounds(self) -> QRectF:
+        # у стрелки наконечник шире линии — берём запас с учётом его размера
+        m = max(self.width * 4, 12) + 2
+        return self.rect().adjusted(-m, -m, m, m)
 
 
 @dataclass
@@ -133,7 +149,7 @@ class TextShape(Shape):
     def lines(self) -> list[str]:
         return self.text.split("\n")
 
-    def bounds(self) -> QRectF:
+    def bounds_text(self) -> QRectF:
         fm = QFontMetricsF(self.font())
         w = max((fm.horizontalAdvance(l) for l in self.lines()), default=0)
         return QRectF(self.pos, QPointF(self.pos.x() + max(w, 2), self.pos.y() + fm.lineSpacing() * len(self.lines())))
@@ -147,6 +163,9 @@ class TextShape(Shape):
 
     def is_empty(self) -> bool:
         return not self.text.strip()
+
+    def bounds(self) -> QRectF:
+        return self.bounds_text().adjusted(-8, -6, 10, 6)
 
     def paint(self, p: QPainter) -> None:
         f = self.font()

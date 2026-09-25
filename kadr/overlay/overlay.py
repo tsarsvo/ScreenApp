@@ -14,8 +14,8 @@ import math
 import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence, QMouseEvent,
-                           QPainter, QPainterPath, QPen, QWheelEvent)
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence,
+                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
 from ..capture import ScreenShot
@@ -55,6 +55,19 @@ def _is_key(event: QKeyEvent, key: Qt.Key) -> bool:
         if sys.platform == "darwin":
             return _MAC_VK.get(chr(key).lower()) == vk
     return False
+
+
+class _Fonts:
+    """Шрифты подписей создаются один раз, а не в каждом кадре."""
+
+    def __init__(self) -> None:
+        self.small_medium = QFont()
+        self.small_medium.setPixelSize(11)
+        self.small_medium.setWeight(QFont.Weight.Medium)
+        self.small_medium_metrics = QFontMetrics(self.small_medium)
+        self.hint = QFont()
+        self.hint.setPixelSize(12)
+        self.hint_metrics = QFontMetrics(self.hint)
 
 
 class Overlay(QWidget):
@@ -136,6 +149,12 @@ class Overlay(QWidget):
         self._picking = False
         self._shot_image: QImage | None = None
 
+        # Кэш: все готовые фигуры нарисованы в прозрачный слой. Перерисовывается он только
+        # при undo/redo, а новая фигура просто дорисовывается сверху — поэтому движение
+        # мыши не заставляет заново рисовать сотни штрихов.
+        self._layer: QPixmap | None = None
+        self._fonts = _Fonts()
+
         self.apply_theme(tokens)
         self.toolbar.set_tool(self._tool)
         self._sync_toolbar()
@@ -167,6 +186,7 @@ class Overlay(QWidget):
         self._commit_text()
         self._sel = None
         self._history = History()
+        self._layer = None
         self._mode = "idle"
         self.toolbar.hide()
         self.popup.hide()
@@ -231,12 +251,14 @@ class Overlay(QWidget):
             self._caret_timer.stop()
         elif not self._history.undo():
             return
+        self._layer = None
         self._sync_toolbar()
         self.update()
 
     def redo(self) -> None:
         self._commit_text()
         if self._history.redo():
+            self._layer_add(self._history.shapes[-1])
             self._sync_toolbar()
             self.update()
 
@@ -373,13 +395,14 @@ class Overlay(QWidget):
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
         pos = e.position().toPoint()
-        self._mouse = pos
+        old_mouse, self._mouse = self._mouse, pos
         shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         bounds = self.rect()
 
         if self._picking:
             self.update()
             return
+        old_sel = QRect(self._sel) if self._sel else None
         if self._mode == "selecting":
             end = self._constrain_square(self._press, pos) if shift else pos
             self._sel = QRect(self._press, end).normalized().intersected(bounds)
@@ -391,10 +414,16 @@ class Overlay(QWidget):
         elif self._mode == "resizing":
             self._sel = self._resized(pos).intersected(bounds)
         elif self._mode == "drawing" and self._current:
+            before = self._current.bounds()
             self._continue_drawing(QPointF(e.position()), shift)
+            self._update_shape_area(before)
+            return
         else:
             self._update_cursor(pos)
-        self.update()
+            self._update_hover(old_mouse)
+            return
+        # Перерисовываем только область старого и нового выделения (+ ручки и подпись размера)
+        self.update(self._selection_area(old_sel).united(self._selection_area(self._sel)))
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         if e.button() != Qt.MouseButton.LeftButton:
@@ -413,6 +442,7 @@ class Overlay(QWidget):
             self._continue_drawing(QPointF(e.position()), shift)
             if not self._current.is_empty():
                 self._history.push(self._current)
+                self._layer_add(self._current)
                 self._sync_toolbar()
             self._current = None
         self._update_cursor(e.position().toPoint())
@@ -472,6 +502,59 @@ class Overlay(QWidget):
         side = max(abs(dx), abs(dy))
         return type(b)(a.x() + math.copysign(side, dx or 1), a.y() + math.copysign(side, dy or 1))
 
+    # ------------------------------------------------------ частичная перерисовка
+    def _selection_area(self, r: QRect | None) -> QRect:
+        if r is None:
+            return QRect()
+        # ручки, рамка и «таблетка» с размером над левым верхним углом
+        return r.adjusted(-HANDLE_HIT - 2, -34, 160, HANDLE_HIT + 2)
+
+    def _update_shape_area(self, before: QRectF) -> None:
+        cur = self._current
+        if isinstance(cur, PenStroke) and len(cur.points) >= 2:
+            # штрих растёт с конца — достаточно перерисовать последние сегменты
+            tail = cur.points[-4:]
+            m = cur.width + 2
+            area = QRectF(QPolygonF(tail).boundingRect()).adjusted(-m, -m, m, m)
+        else:
+            area = before.united(cur.bounds())
+        self.update(area.toAlignedRect())
+
+    def _update_hover(self, old: QPoint) -> None:
+        """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
+        иначе перерисовывать нечего (кроме подсказки толщины)."""
+        if not self._sel:
+            w, h = self.width(), self.height()
+            for pt in (old, self._mouse):
+                self.update(QRect(0, pt.y() - 1, w, 3))
+                self.update(QRect(pt.x() - 1, 0, 3, h))
+        elif self._width_hint:
+            r = self._width + 90
+            for pt in (old, self._mouse):
+                self.update(QRect(pt.x() - r, pt.y() - r, 2 * r, 2 * r))
+
+    def _ensure_layer(self) -> QPixmap:
+        if self._layer is None:
+            dpr = self._shot.dpr
+            self._layer = QPixmap(round(self.width() * dpr), round(self.height() * dpr))
+            self._layer.setDevicePixelRatio(dpr)
+            self._layer.fill(Qt.GlobalColor.transparent)
+            p = QPainter(self._layer)
+            p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+            for s in self._history.shapes:
+                s.paint(p)
+            p.end()
+        return self._layer
+
+    def _layer_add(self, shape: Shape) -> None:
+        """Дорисовать одну новую фигуру в готовый слой (без полной перерисовки)."""
+        if self._layer is None:
+            return  # слой соберётся целиком при следующей отрисовке
+        p = QPainter(self._layer)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        shape.paint(p)
+        p.end()
+
     # --------------------------------------------------------------- drawing
     def _start_drawing(self, pos: QPointF) -> None:
         c, w = QColor(self._color), self._width
@@ -507,6 +590,7 @@ class Overlay(QWidget):
             return
         if not self._editing.is_empty():
             self._history.push(self._editing)
+            self._layer_add(self._editing)
         self._editing = None
         self._caret_timer.stop()
         self._sync_toolbar()
@@ -514,7 +598,8 @@ class Overlay(QWidget):
 
     def _blink(self) -> None:
         self._caret_on = not self._caret_on
-        self.update()
+        if self._editing:
+            self.update(self._editing.bounds().toAlignedRect())
 
     def _set_dim(self, v) -> None:
         self._dim = float(v)
@@ -585,20 +670,27 @@ class Overlay(QWidget):
         return True
 
     # ---------------------------------------------------------------- paint
-    def paintEvent(self, _event) -> None:
+    def paintEvent(self, event) -> None:
+        exposed = event.rect()             # рисуем только то, что реально изменилось
+        dpr = self._shot.dpr
         p = QPainter(self)
+        p.drawPixmap(QRectF(exposed), self._shot.pixmap,
+                     QRectF(exposed.x() * dpr, exposed.y() * dpr, exposed.width() * dpr, exposed.height() * dpr))
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
-        p.drawPixmap(0, 0, self._shot.pixmap)
 
-        # Затемнение вокруг выделения (с анимацией появления)
+        # Затемнение вокруг выделения (с анимацией появления): 4 прямоугольника
+        # вместо вычитания контуров — в разы быстрее на больших экранах
         dim = QColor(0, 0, 0, int(DIM_ALPHA * self._dim))
-        outside = QPainterPath()
-        outside.addRect(QRectF(self.rect()))
-        if self._sel and not self._sel.isEmpty():
-            inner = QPainterPath()
-            inner.addRect(QRectF(self._sel))
-            outside = outside.subtracted(inner)
-        p.fillPath(outside, dim)
+        w, h = self.width(), self.height()
+        s = self._sel
+        if s and not s.isEmpty():
+            for r in (QRect(0, 0, w, s.top()), QRect(0, s.bottom() + 1, w, h - s.bottom() - 1),
+                      QRect(0, s.top(), s.left(), s.height()),
+                      QRect(s.right() + 1, s.top(), w - s.right() - 1, s.height())):
+                if r.intersects(exposed):
+                    p.fillRect(r.intersected(exposed), dim)
+        else:
+            p.fillRect(exposed, dim)
 
         if not self._sel:
             self._paint_guides(p)
@@ -608,8 +700,11 @@ class Overlay(QWidget):
         # Фигуры обрезаются по границе выделения — ровно так, как попадут в файл
         p.save()
         p.setClipRect(self._sel)
-        for s in self._history.shapes:
-            s.paint(p)
+        if self._history.shapes:
+            area = QRectF(self._sel.intersected(exposed))
+            if not area.isEmpty():
+                p.drawPixmap(area, self._ensure_layer(),
+                             QRectF(area.x() * dpr, area.y() * dpr, area.width() * dpr, area.height() * dpr))
         if self._current:
             self._current.paint(p)
         if self._editing:
@@ -647,19 +742,16 @@ class Overlay(QWidget):
     def _paint_size_label(self, p: QPainter) -> None:
         dpr = self._shot.dpr
         text = f"{round(self._sel.width() * dpr)} × {round(self._sel.height() * dpr)}"
-        f = QFont()
-        f.setPixelSize(11)
-        f.setWeight(QFont.Weight.Medium)
-        w = QFontMetrics(f).horizontalAdvance(text) + 16
+        f = self._fonts.small_medium
+        w = self._fonts.small_medium_metrics.horizontalAdvance(text) + 16
         y = self._sel.top() - 26 if self._sel.top() >= 30 else self._sel.top() + 6
         x = self._sel.left() if self._sel.top() >= 30 else self._sel.left() + 6
         self._pill(p, QRectF(x, y, w, 20), text, f)
 
     def _paint_hint(self, p: QPainter) -> None:
         text = "Выделите область  ·  клик — весь экран  ·  Esc — отмена"
-        f = QFont()
-        f.setPixelSize(12)
-        w = QFontMetrics(f).horizontalAdvance(text) + 28
+        f = self._fonts.hint
+        w = self._fonts.hint_metrics.horizontalAdvance(text) + 28
         p.setOpacity(self._dim)
         self._pill(p, QRectF((self.width() - w) / 2, 24, w, 30), text, f)
         p.setOpacity(1.0)
@@ -678,7 +770,7 @@ class Overlay(QWidget):
     def _paint_text_editor(self, p: QPainter) -> None:
         ed = self._editing
         ed.paint(p)
-        box = ed.bounds().adjusted(-4, -2, 6, 2)
+        box = ed.bounds_text().adjusted(-4, -2, 6, 2)
         pen = QPen(self._t.q("accent"), 1, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         p.setPen(pen)

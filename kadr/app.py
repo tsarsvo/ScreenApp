@@ -1,11 +1,13 @@
 """Контроллер приложения: трей, одна копия, горячие клавиши, запуск захвата."""
 from __future__ import annotations
 
+import dataclasses
 import getpass
 import sys
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QTimer, QUrl, Qt
+from PySide6.QtCore import QObject, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -19,8 +21,16 @@ from .replay import ReplayOptions, ReplayRecorder
 from .saver import copy_to_clipboard, save_image
 from .theme import ThemeManager
 
-# Задержка перед снимком: даём ОС убрать меню трея / отпустить клавиши
-CAPTURE_DELAY_MS = 120
+# Задержка перед снимком из меню трея — чтобы само меню успело исчезнуть с экрана.
+# По горячей клавише снимок делается сразу.
+MENU_CAPTURE_DELAY_MS = 200
+
+
+class _SaveSignals(QObject):
+    """Мост из фонового потока сохранения в GUI-поток."""
+
+    saved = Signal(object)    # Path
+    failed = Signal(str)
 
 
 class KadrApp(QObject):
@@ -38,13 +48,21 @@ class KadrApp(QObject):
 
         # Буфер повтора: запускается в фоне, если включён в настройках
         self.replay = ReplayRecorder()
+        self.replay.cache_dir = self.store.path.parent
         self.replay.running_changed.connect(self._on_replay_running)
         self.replay.error.connect(lambda e: self.notify(e, error=True))
         self.replay.saved.connect(lambda p: self.notify(f"Повтор сохранён: {p.name}"))
         self.replay.save_failed.connect(lambda e: self.notify(f"Повтор не сохранён: {e}", error=True))
         self._replay_restart = QTimer(self, singleShot=True, interval=800)  # debounce при смене настроек
         self._replay_restart.timeout.connect(self._apply_replay)
-        qapp.aboutToQuit.connect(self.replay.stop)
+        qapp.aboutToQuit.connect(lambda: self.replay.stop(wait=True))
+        qapp.aboutToQuit.connect(self.store.flush)
+
+        # Сохранение файлов идёт в фоне: кодирование 4K PNG/WEBP занимает 0.3–0.8 с,
+        # и интерфейс не должен на это время замирать
+        self._save_signals = _SaveSignals()
+        self._save_signals.saved.connect(self._on_saved)
+        self._save_signals.failed.connect(lambda e: self.notify(f"Ошибка сохранения: {e}", error=True))
 
         self._build_tray()
         self._hotkey_errors = self._register_hotkeys()
@@ -62,8 +80,9 @@ class KadrApp(QObject):
         self.tray = QSystemTrayIcon(icons.logo_icon(mono), self)
         self.tray.setToolTip(APP_NAME)
         self.menu = QMenu()
-        self.act_region = self.menu.addAction("Выделить область", lambda: self.capture_region())
-        self.act_full = self.menu.addAction("Весь экран", lambda: self.capture_full())
+        self.act_region = self.menu.addAction("Выделить область",
+                                              lambda: self.capture_region(MENU_CAPTURE_DELAY_MS))
+        self.act_full = self.menu.addAction("Весь экран", lambda: self.capture_full(MENU_CAPTURE_DELAY_MS))
         self.menu.addSeparator()
         self.act_replay_save = self.menu.addAction("Сохранить повтор", self.save_replay)
         self.act_replay_toggle = self.menu.addAction("Запись повтора")
@@ -210,7 +229,7 @@ class KadrApp(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     # ----------------------------------------------------------------- capture
-    def capture_full(self, delay: int = CAPTURE_DELAY_MS) -> None:
+    def capture_full(self, delay: int = 0) -> None:
         if self.session:
             return
         QTimer.singleShot(delay, self._do_capture_full)
@@ -222,7 +241,7 @@ class KadrApp(QObject):
             return
         self._save(img)
 
-    def capture_region(self, delay: int = CAPTURE_DELAY_MS) -> None:
+    def capture_region(self, delay: int = 0) -> None:
         if self.session:
             return
         QTimer.singleShot(delay, self._do_capture_region)
@@ -258,11 +277,18 @@ class KadrApp(QObject):
             self.notify("Скопировано в буфер обмена")
 
     def _save(self, img: QImage) -> None:
-        try:
-            path = save_image(img, self.store.data)
-        except Exception as exc:
-            self.notify(f"Ошибка сохранения: {exc}", error=True)
-            return
+        settings = dataclasses.replace(self.store.data)   # снимок настроек для фонового потока
+        signals = self._save_signals
+
+        def work() -> None:
+            try:
+                signals.saved.emit(save_image(img, settings))
+            except Exception as exc:
+                signals.failed.emit(str(exc))
+
+        threading.Thread(target=work, daemon=False, name="kadr-save").start()
+
+    def _on_saved(self, path) -> None:
         if self.store.data.notify_on_save:
             self.notify(f"Сохранено: {path.name}")
 
@@ -341,6 +367,17 @@ def main() -> int:
         print("Системный трей недоступен: настройки можно открыть командой `main.py --settings`")
 
     app = KadrApp(qapp)
+
+    # SIGTERM/Ctrl+C (выключение ПК, kill) → штатный выход: запись повтора остановится,
+    # настройки допишутся. Таймер нужен, чтобы Python успевал обрабатывать сигналы,
+    # пока крутится цикл событий Qt.
+    import signal
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: qapp.quit())
+    _sig_timer = QTimer()
+    _sig_timer.start(500)
+    _sig_timer.timeout.connect(lambda: None)
 
     QLocalServer.removeServer(_server_name())  # на случай «зависшего» сокета после сбоя
     server = QLocalServer()

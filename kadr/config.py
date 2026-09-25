@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QStandardPaths, Signal
+from PySide6.QtCore import QObject, QStandardPaths, QTimer, Signal
 
 from . import APP_NAME
 
@@ -102,6 +102,13 @@ class SettingsStore(QObject):
         super().__init__()
         self.path = config_dir() / "settings.json"
         self.data = self._load()
+        self._saving_enabled = True
+        # Запись на диск откладывается на мгновение: при Ctrl+колесо или перетаскивании
+        # слайдера десятки изменений подряд превращаются в одну запись файла
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self.save)
 
     def _load(self) -> Settings:
         try:
@@ -112,6 +119,9 @@ class SettingsStore(QObject):
             return Settings()
 
     def save(self) -> None:
+        self._save_timer.stop()
+        if not self._saving_enabled:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(self.data), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -121,5 +131,16 @@ class SettingsStore(QObject):
         if getattr(self.data, name) == value:
             return
         setattr(self.data, name, value)
-        self.save()
+        if self._saving_enabled:
+            self._save_timer.start()
         self.changed.emit(name)
+
+    def flush(self) -> None:
+        """Записать отложенные изменения сейчас (при выходе из приложения)."""
+        if self._save_timer.isActive():
+            self.save()
+
+    def disable_saving(self) -> None:
+        """После удаления приложения настройки больше не должны появляться на диске."""
+        self._saving_enabled = False
+        self._save_timer.stop()

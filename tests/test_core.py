@@ -207,6 +207,7 @@ def test_palette_is_saved_and_validated(tmp_path, monkeypatch):
     pal = list(store.data.palette)
     pal[0] = "#ABCDEF"
     store.set("palette", pal)
+    store.flush()                                                   # запись отложена — сбрасываем
     assert config.SettingsStore().data.palette[0] == "#ABCDEF"      # сохранилось на диск
     broken = config.Settings(palette=["red", "#12345", 5])
     assert broken.palette == config.DEFAULT_PALETTE                 # мусор → стандартные цвета
@@ -242,3 +243,43 @@ def test_settings_palette_follows_store(qapp, tmp_path, monkeypatch):
     store.set("palette", pal)                      # например, изменили в оверлее
     assert w._pal_buttons[4].color.name().upper() == "#010203"
     w.close()
+
+
+def test_partial_repaint_leaves_no_stale_pixels(qapp):
+    """Оверлей перерисовывает только изменённые области — на экране не должно оставаться «хвостов»."""
+    import math
+
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp, 400, 300)
+    o._dim_anim.stop()
+    o._dim = 1.0
+    o.update()
+
+    def stale() -> int:
+        qapp.processEvents()
+        shown = qapp.primaryScreen().grabWindow(o.winId()).toImage().convertToFormat(QImage.Format.Format_RGB32)
+        fresh = o.grab().toImage().convertToFormat(QImage.Format.Format_RGB32)
+        skip = [w.geometry() for w in (o.toolbar, o.popup) if w.isVisible()]
+        return sum(shown.pixel(x, y) != fresh.pixel(x, y)
+                   for y in range(0, 300, 3) for x in range(0, 400, 3)
+                   if not any(r.contains(x, y) for r in skip))
+
+    for i in range(10):
+        QTest.mouseMove(o, QPoint(50 + i * 9, 40 + i * 5))
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(60, 50))
+    for i in range(12):
+        QTest.mouseMove(o, QPoint(200 + int(90 * math.sin(i)), 150 + int(60 * math.cos(i))))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 220))
+    assert stale() == 0
+    for tool in (Tool.PEN, Tool.ARROW, Tool.ELLIPSE):
+        o.set_tool(tool)
+        QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
+        for i in range(15):
+            QTest.mouseMove(o, QPoint(100 + i * 12, 100 + int(40 * math.sin(i / 2))))
+        QTest.mouseMove(o, QPoint(150, 80))
+        QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(150, 80))
+        assert stale() == 0, tool
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert stale() == 0
+    o.close()
