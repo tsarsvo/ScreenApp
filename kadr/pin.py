@@ -4,6 +4,7 @@
   • перетаскивание мышью, край или угол — изменить размер (пропорции сохраняются);
   • колесо — масштаб, Ctrl+колесо — прозрачность;
   • двойной клик или Esc — закрыть, правый клик — меню (копировать, сохранить…);
+  • крестик в правом верхнем углу (при наведении) — закрыть;
   • карандаш в правом нижнем углу — рисование прямо на снимке (три быстрых цвета),
     рядом — копирование в буфер вместе с нарисованным.
 """
@@ -25,7 +26,8 @@ PANEL_MARGIN = 6
 PEN_WIDTH = 3.0          # толщина линии в логических пикселях снимка
 QUICK_COLORS = ("#FF3B30", "#FF9500", "#FFCC00")
 _TIPS = {"pen": "Рисовать на снимке (ещё раз — выключить) · Ctrl+Z — отменить",
-         "copy": "Копировать в буфер обмена (вместе с рисунком)"}
+         "copy": "Копировать в буфер обмена (вместе с рисунком)",
+         "close": "Закрыть снимок"}
 
 _EDGE_CURSORS = {
     "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
@@ -94,6 +96,7 @@ class PinWindow(QWidget):
         p.drawRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
         if self._hover or self._drawing:
             self._paint_controls(p)
+            self._paint_close(p)
 
     # ------------------------------------------------------------- рисование
     def _image_scale(self) -> tuple[float, float]:
@@ -155,10 +158,16 @@ class PinWindow(QWidget):
             x -= BTN + BTN_GAP
         return out
 
+    def _close_rect(self) -> QRectF:
+        """Крестик в правом верхнем углу — закрыть без правого клика."""
+        return QRectF(self.width() - BORDER - PANEL_MARGIN - BTN, BORDER + PANEL_MARGIN, BTN, BTN)
+
     def _control_at(self, pos) -> str | None:
         if not (self._hover or self._drawing):
             return None
         pt = QPointF(pos)
+        if self._close_rect().contains(pt):
+            return "close"
         return next((cid for cid, r in self._controls() if r.contains(pt)), None)
 
     def _icon(self, name: str) -> QPixmap:
@@ -188,6 +197,17 @@ class PinWindow(QWidget):
                 p.setBrush(self._accent)
                 p.drawEllipse(r)
             p.drawPixmap(QPointF(r.center().x() - 8, r.center().y() - 8), self._icon(cid))
+        p.restore()
+
+    def _paint_close(self, p: QPainter) -> None:
+        r = self._close_rect()
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setOpacity(0.85)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(20, 20, 22, 160))
+        p.drawEllipse(r)
+        p.drawPixmap(QPointF(r.center().x() - 8, r.center().y() - 8), self._icon("close"))
         p.restore()
 
     def event(self, e) -> bool:
@@ -225,6 +245,9 @@ class PinWindow(QWidget):
             return
         if cid == "copy":
             self._copy()
+            return
+        if cid == "close":
+            self.close()
             return
         if cid:                                   # один из цветов
             self._color = self._colors[int(cid[5:])]
