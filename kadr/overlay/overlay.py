@@ -15,7 +15,7 @@ import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence,
-                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QWheelEvent)
+                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QTransform, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
 from ..capture import ScreenShot
@@ -161,7 +161,13 @@ class Overlay(QWidget):
         # Кэш: все готовые фигуры нарисованы в прозрачный слой. Перерисовывается он только
         # при undo/redo, а новая фигура просто дорисовывается сверху — поэтому движение
         # мыши не заставляет заново рисовать сотни штрихов.
+        # Буфер слоя (экран целиком, ~33 МБ на 4K) создаётся один раз: при сборке заново
+        # стирается только та часть, где были фигуры, — первое заполнение нового буфера
+        # стоило больше, чем рисование сотни фигур.
         self._layer: QPixmap | None = None
+        self._layer_valid = False
+        self._layer_dirty = QRect()     # где в буфере могут быть нарисованные фигуры
+        self._layer_pending: QRectF | None = None   # что пересобрать при частичной сборке
         self._fonts = _Fonts()
 
         self.apply_theme(tokens)
@@ -196,6 +202,7 @@ class Overlay(QWidget):
         self._sel = None
         self._history = History()
         self._layer = None
+        self._layer_valid = False
         self._mode = "idle"
         self.toolbar.hide()
         self.popup.hide()
@@ -274,7 +281,7 @@ class Overlay(QWidget):
                 return
             if action.sel_before is not None:
                 self._set_selection(action.sel_before)
-        self._layer = None
+            self._invalidate_layer(self._action_area(action))
         self._sync_toolbar()
         self.update()
 
@@ -284,9 +291,20 @@ class Overlay(QWidget):
         if action:
             if action.sel_after is not None:
                 self._set_selection(action.sel_after)
-            self._layer = None
+            if action.kind == "move":
+                self._invalidate_layer(self._action_area(action))
+            else:
+                self._layer_add(action.shape)       # вернулась последней — просто дорисовать
             self._sync_toolbar()
             self.update()
+
+    def _action_area(self, action) -> QRectF:
+        """Где на слое изменилось что-то после отмены/повтора действия."""
+        r = QRectF(self._shape_rect(action.shape))
+        if action.kind == "move":
+            d = action.new_pos - action.old_pos
+            r = r.united(r.translated(d)).united(r.translated(-d))
+        return r
 
     def _set_selection(self, r: QRect) -> None:
         self._sel = QRect(r)
@@ -301,7 +319,7 @@ class Overlay(QWidget):
         if grown != before:
             self._history.push(shape, before, grown)
             self._set_selection(grown)
-            self._layer = None
+            self._layer_add(shape)
             self.update()
         else:
             self._history.push(shape)
@@ -449,7 +467,7 @@ class Overlay(QWidget):
             self._mode, self._drag_step = "dragging", step
             self._drag_from = QPointF(step.pos)
             self._drag_offset = step.pos - QPointF(e.position())
-            self._layer = None
+            self._invalidate_layer(QRectF(self._shape_rect(step)))
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         elif self._sel and self._tool != Tool.SELECT:
             # рисовать можно и за пределами выделения — оно расширится до фигуры
@@ -532,10 +550,11 @@ class Overlay(QWidget):
                 self._sync_toolbar()
         elif mode == "dragging" and self._drag_step:
             step, self._drag_step = self._drag_step, None
+            area = QRectF(self._shape_rect(step))
             if step.pos != self._drag_from:
                 self._history.push_move(step, self._drag_from, step.pos)
                 self._sync_toolbar()
-            self._layer = None
+            self._invalidate_layer(area)             # шаг возвращается в слой на новом месте
         self._update_cursor(e.position().toPoint())
         self.update()
 
@@ -646,28 +665,81 @@ class Overlay(QWidget):
             for pt in (old, self._mouse):
                 self.update(QRect(pt.x() - r, pt.y() - r, 2 * r, 2 * r))
 
+    def _invalidate_layer(self, area: QRectF | None = None) -> None:
+        """Слой пересоберётся при следующей отрисовке: целиком или только в области area
+        (логические координаты) — после Ctrl+Z или переноса шага меняется лишь маленький кусок."""
+        if area is None or not self._layer_valid:
+            self._layer_valid = False
+            self._layer_pending = None
+        else:
+            self._layer_pending = area if self._layer_pending is None else self._layer_pending.united(area)
+
     def _ensure_layer(self) -> QPixmap:
         if self._layer is None:
             dpr = self._shot.dpr
             self._layer = QPixmap(round(self.width() * dpr), round(self.height() * dpr))
             self._layer.setDevicePixelRatio(dpr)
             self._layer.fill(Qt.GlobalColor.transparent)
+            self._layer_dirty = QRect()
+            self._layer_valid = False
+        if not self._layer_valid:
             p = QPainter(self._layer)
+            if not self._layer_dirty.isEmpty():
+                p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                p.fillRect(self._layer_dirty, Qt.GlobalColor.transparent)
+                p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
             p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+            dirty = QRect()
             for s in self._history.shapes:
                 if s is not self._drag_step:
                     s.paint(p)
+                    dirty = dirty.united(self._shape_rect(s))
             p.end()
+            self._layer_dirty = dirty
+            self._layer_valid = True
+            self._layer_pending = None
+        elif self._layer_pending is not None:
+            self._rebuild_layer_area(self._layer_pending)
+            self._layer_pending = None
         return self._layer
+
+    def _rebuild_layer_area(self, area: QRectF) -> None:
+        # Стираем и обрезаем по целым физическим пикселям — иначе при дробном масштабе
+        # на краю области остался бы полупрозрачный «шов».
+        dpr = self._shot.dpr
+        dev = QRectF(area.x() * dpr, area.y() * dpr, area.width() * dpr, area.height() * dpr)
+        dev = dev.toAlignedRect().adjusted(-1, -1, 1, 1).intersected(self._layer.rect())
+        if dev.isEmpty():
+            return
+        p = QPainter(self._layer)
+        p.setWorldTransform(QTransform.fromScale(1 / dpr, 1 / dpr))   # → физические пиксели
+        p.setClipRect(dev)                     # обрезка запоминается в физических пикселях
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.fillRect(dev, Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        p.setWorldTransform(QTransform())      # обратно в логические координаты
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        logical = QRectF(dev.x() / dpr, dev.y() / dpr, dev.width() / dpr, dev.height() / dpr)
+        for s in self._history.shapes:
+            if s is not self._drag_step and QRectF(self._shape_rect(s)).intersects(logical):
+                s.paint(p)
+        p.end()
+        self._layer_dirty = self._layer_dirty.united(logical.toAlignedRect())
+
+    @staticmethod
+    def _shape_rect(shape: Shape) -> QRect:
+        # bounds() уже с запасом на толщину; ещё 2 px — на сглаживание при дробном масштабе
+        return shape.bounds().toAlignedRect().adjusted(-2, -2, 2, 2)
 
     def _layer_add(self, shape: Shape) -> None:
         """Дорисовать одну новую фигуру в готовый слой (без полной перерисовки)."""
-        if self._layer is None:
+        if not self._layer_valid:
             return  # слой соберётся целиком при следующей отрисовке
         p = QPainter(self._layer)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         shape.paint(p)
         p.end()
+        self._layer_dirty = self._layer_dirty.united(self._shape_rect(shape))
 
     # --------------------------------------------------------------- drawing
     def _start_drawing(self, pos: QPointF) -> None:

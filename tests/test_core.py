@@ -565,3 +565,83 @@ def test_line_tool_draws_straight_line_snapped_with_shift(qapp):
     img = o.render_selection()
     assert img.pixelColor((200 - 100) * 2, (300 - 100) * 2).red() > 200   # линия есть в файле
     o.close()
+
+
+def test_layer_rebuild_leaves_nothing_behind_after_undo(qapp):
+    """Слой не пересоздаётся, а стирается по области фигур: после отмены всех фигур
+    (включая самые толстые) в нём не должно остаться ни пикселя."""
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (20, 20), (780, 580))
+    o._set_width(40)
+    for k, tool in enumerate((Tool.PEN, Tool.ARROW, Tool.LINE, Tool.RECT, Tool.ELLIPSE, Tool.MARKER,
+                              Tool.PIXELATE, Tool.STEP)):
+        o.set_tool(tool)
+        _drag(o, (100 + k * 70, 150), (160 + k * 70, 400))
+    o.set_tool(Tool.TEXT)
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(150, 480))
+    QTest.keyClicks(o, "Kadr")
+    o._commit_text()
+    buf = o._ensure_layer()
+    assert len(o._history.shapes) == 9
+    while o._history.can_undo():
+        o.undo()
+    layer = o._ensure_layer()
+    assert layer is buf                                  # буфер переиспользован, а не создан заново
+    empty = QImage(layer.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    empty.fill(Qt.GlobalColor.transparent)
+    assert layer.toImage().convertToFormat(QImage.Format.Format_ARGB32_Premultiplied) == empty
+    o.close()
+
+
+@pytest.mark.parametrize("dpr", [1.25, 1.5, 1.75])
+def test_partial_layer_rebuild_matches_full_rebuild(qapp, dpr):
+    """Ctrl+Z и перенос шага пересобирают только кусок слоя — результат должен совпадать
+    с полной сборкой пиксель в пиксель (в том числе при дробном масштабе Windows)."""
+    from kadr.capture import ScreenShot
+    from kadr.overlay.overlay import Overlay
+    from kadr.overlay.shapes import StepShape, Tool
+    from kadr.theme import LIGHT
+
+    w, h = 640, 480
+    px = QPixmap(round(w * dpr), round(h * dpr))
+    px.fill(QColor("white"))
+    px.setDevicePixelRatio(dpr)
+    o = Overlay(ScreenShot(QGuiApplication.primaryScreen(), QRect(0, 0, w, h), px), LIGHT, QColor("#FF3B30"), 6)
+    o.show()
+    o.resize(w, h)
+    _drag(o, (10, 10), (630, 470))
+    for k, tool in enumerate((Tool.RECT, Tool.MARKER, Tool.ARROW, Tool.ELLIPSE, Tool.PEN, Tool.LINE) * 2):
+        o.set_tool(tool)
+        _drag(o, (60 + k * 37, 80 + (k % 3) * 40), (200 + k * 29, 300 - (k % 4) * 30))   # фигуры перекрываются
+    o.set_tool(Tool.STEP)
+    for x in (120, 260, 400):
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, 200))
+    o._ensure_layer()
+
+    step = [s for s in o._history.shapes if isinstance(s, StepShape)][1]
+    _drag(o, (260, 200), (330, 260))                     # перенос шага поверх других фигур
+    o.undo()
+    o.undo()                                             # отмена переноса и последнего шага
+    o.redo()
+    o._ensure_layer()
+    assert step.pos.toPoint() == QPoint(260, 200)
+    partial = o._layer.toImage()
+    o._invalidate_layer()                                # полная сборка для сравнения
+    full = o._ensure_layer().toImage()
+    # Qt по-разному округляет сглаженные края внутри и вне обрезки: ±1 из 255 допустимо,
+    # а вот пропавшая или «застрявшая» фигура дала бы разницу в десятки единиц
+    assert _max_channel_diff(partial, full) <= 2
+    o.close()
+
+
+
+def _max_channel_diff(a, b) -> int:
+    assert a.size() == b.size()
+    a = a.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    b = b.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    da, db = bytes(a.constBits()), bytes(b.constBits())
+    if da == db:
+        return 0
+    return max(abs(x - y) for x, y in zip(da, db) if x != y)
