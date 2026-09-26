@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import os
 import sys
 import threading
 import time
@@ -427,10 +428,16 @@ def _send_to_running(cmd: str, timeout_ms: int = 300) -> bool:
         sock = QLocalSocket()
         sock.connectToServer(_server_name())
         if sock.waitForConnected(500):
-            sock.write(cmd.encode())
-            sock.waitForBytesWritten(1000)
+            sock.write(cmd.encode() + b"\n")
+            sock.waitForBytesWritten(2000)
             sock.disconnectFromServer()
+            if sock.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+                sock.waitForDisconnected(1000)
+            # Закрываем принудительно: на Windows незавершённая запись в канал могла
+            # держать процесс при выходе бесконечно, пока первая копия занята
+            sock.abort()
             return True
+        sock.abort()
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.2)
@@ -465,7 +472,11 @@ def main() -> int:
     if not lock.tryLock(wait_ms):
         # Уже запущено: только передаём команду. Вторую копию не поднимаем никогда —
         # иначе `Kadr.exe --full` при занятой первой копии остался бы висеть в трее.
-        return 0 if _send_to_running(cmd or "settings", timeout_ms=10_000) else 1
+        # Страховка: эта копия нужна только чтобы передать команду — дольше 15 с она
+        # не живёт ни при каких обстоятельствах
+        threading.Timer(15, lambda: os._exit(1)).start()
+        ok = _send_to_running(cmd or "settings", timeout_ms=10_000)
+        os._exit(0 if ok else 1)     # без очистки Qt при выходе: ей нечего сохранять
 
     if sys.platform == "darwin":
         _hide_dock_icon()
@@ -493,10 +504,32 @@ def main() -> int:
     server.listen(_server_name())
 
     def on_connection():
-        conn = server.nextPendingConnection()
-        conn.waitForReadyRead(300)
-        app.handle_command(bytes(conn.readAll()).decode(errors="ignore"))
-        conn.deleteLater()
+        while server.hasPendingConnections():
+            conn = server.nextPendingConnection()
+            buf = bytearray()
+
+            # Команда читается, когда данные действительно пришли (раньше ждали 300 мс,
+            # и опоздавшая команда терялась). Конец команды — перевод строки или отключение.
+            def read(conn=conn, buf=buf):
+                buf.extend(bytes(conn.readAll()))
+                if b"\n" in buf or conn.state() != QLocalSocket.LocalSocketState.ConnectedState:
+                    finish(conn, buf)
+
+            def finish(conn, buf):
+                if conn.property("done"):
+                    return
+                conn.setProperty("done", True)
+                buf.extend(bytes(conn.readAll()))
+                cmd = bytes(buf).split(b"\n")[0].decode(errors="ignore").strip()
+                if cmd:
+                    app.handle_command(cmd)
+                conn.deleteLater()
+
+            conn.readyRead.connect(read)
+            conn.disconnected.connect(lambda conn=conn, buf=buf: finish(conn, buf))
+            QTimer.singleShot(5000, conn, lambda conn=conn, buf=buf: finish(conn, buf))   # не висим вечно
+            if conn.bytesAvailable():
+                read()
 
     server.newConnection.connect(on_connection)
 
