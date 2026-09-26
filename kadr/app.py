@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import json
 import os
 import sys
 import threading
@@ -14,9 +15,9 @@ from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QI
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import APP_ID, APP_NAME, __version__, admin, autostart, icons
+from . import APP_ID, APP_NAME, __version__, admin, autostart, icons, topmost
 from .capture import grab_full_desktop, grab_screens
-from .config import SettingsStore
+from .config import SettingsStore, config_dir
 from .hotkeys import HotkeyManager, label_for
 from .overlay import CaptureSession
 from .replay import ReplayOptions, ReplayRecorder
@@ -62,6 +63,8 @@ class KadrApp(QObject):
         self._replay_restart.timeout.connect(self._apply_replay)
         qapp.aboutToQuit.connect(lambda: self.replay.stop(wait=True))
         qapp.aboutToQuit.connect(self.store.flush)
+        self._hidden_windows: list[int] = []     # окна, спрятанные на время выделения
+        qapp.aboutToQuit.connect(lambda: topmost.restore(self._hidden_windows))
 
         # Сохранение файлов идёт в фоне: кодирование 4K PNG/WEBP занимает 0.3–0.8 с,
         # и интерфейс не должен на это время замирать
@@ -308,12 +311,16 @@ class KadrApp(QObject):
         self.session.save_requested.connect(self._save)
         self.session.style_changed.connect(self._remember_style)
         self.session.finished.connect(self._on_session_finished)
+        # Снимок уже сделан — окна «выше всех» (Диспетчер задач) не должны закрывать выделение
+        self._hidden_windows = topmost.hide_over_overlay()
         self.session.start()
 
     def _on_session_finished(self) -> None:
         if self.session:
             self.session.deleteLater()
         self.session = None
+        topmost.restore(self._hidden_windows)
+        self._hidden_windows = []
 
     def _remember_style(self, color: QColor, width: int) -> None:
         self.store.set("pen_color", color.name().upper())
@@ -443,6 +450,15 @@ def _send_to_running(cmd: str, timeout_ms: int = 300) -> bool:
         time.sleep(0.2)
 
 
+def _wants_admin() -> bool:
+    """Тумблер «Права администратора» — читается до запуска приложения."""
+    try:
+        data = json.loads((config_dir() / "settings.json").read_text(encoding="utf-8"))
+        return bool(data.get("run_as_admin")) if isinstance(data, dict) else False
+    except (OSError, ValueError):
+        return False
+
+
 def _hide_dock_icon() -> None:
     """macOS: приложение живёт только в строке меню, без иконки в Dock."""
     try:
@@ -477,6 +493,14 @@ def main() -> int:
         threading.Timer(15, lambda: os._exit(1)).start()
         ok = _send_to_running(cmd or "settings", timeout_ms=10_000)
         os._exit(0 if ok else 1)     # без очистки Qt при выходе: ей нечего сохранять
+
+    if admin.should_elevate_at_start(args, _wants_admin()):
+        # Включены права администратора: перезапускаемся с ними (Windows спросит разрешение).
+        # Отказались — работаем как обычно, без повторных попыток.
+        lock.unlock()
+        if admin.relaunch_as_admin([a for a in args if a in flags]):
+            return 0
+        lock.tryLock(0)
 
     if sys.platform == "darwin":
         _hide_dock_icon()
