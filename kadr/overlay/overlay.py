@@ -279,8 +279,6 @@ class Overlay(QWidget):
             action = self._history.undo()
             if not action:
                 return
-            if action.sel_before is not None:
-                self._set_selection(action.sel_before)
             self._invalidate_layer(self._action_area(action))
         self._sync_toolbar()
         self.update()
@@ -289,8 +287,6 @@ class Overlay(QWidget):
         self._commit_text()
         action = self._history.redo()
         if action:
-            if action.sel_after is not None:
-                self._set_selection(action.sel_after)
             if action.kind == "move":
                 self._invalidate_layer(self._action_area(action))
             else:
@@ -306,24 +302,11 @@ class Overlay(QWidget):
             r = r.united(r.translated(d)).united(r.translated(-d))
         return r
 
-    def _set_selection(self, r: QRect) -> None:
-        self._sel = QRect(r)
-        if self.toolbar.isVisible():
-            self._place_toolbar()
-
     def _push_shape(self, shape: Shape) -> None:
-        """Готовая фигура → в историю. Если она вышла за край выделения, выделение
-        расширяется до неё: в файл попадает ровно то, что нарисовано."""
-        before = QRect(self._sel)
-        grown = before.united(shape.bounds().toAlignedRect()).intersected(self.rect())
-        if grown != before:
-            self._history.push(shape, before, grown)
-            self._set_selection(grown)
-            self._layer_add(shape)
-            self.update()
-        else:
-            self._history.push(shape)
-            self._layer_add(shape)
+        """Готовая фигура → в историю и в слой. Выделение не меняется: всё, что вышло
+        за рамку, обрезается по ней — и на экране, и в файле."""
+        self._history.push(shape)
+        self._layer_add(shape)
 
     # ------------------------------------------------------------- actions
     def _copy(self) -> None:
@@ -469,8 +452,11 @@ class Overlay(QWidget):
             self._drag_offset = step.pos - QPointF(e.position())
             self._invalidate_layer(QRectF(self._shape_rect(step)))
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif self._sel is not None and self._tool != Tool.SELECT:
-            # рисовать можно и за пределами выделения — оно расширится до фигуры
+        elif self._sel is not None and self._tool != Tool.SELECT and (
+                self._sel.contains(pos) or self._tool not in (Tool.TEXT, Tool.STEP)):
+            # Линию, стрелку, рамку, кисть можно начать и за выделением (например, стрелку
+            # «с края»); в снимок попадает только часть внутри рамки. Текст и номер шага
+            # за рамкой были бы невидимы — их ставим только внутри.
             self._start_drawing(QPointF(e.position()))
         elif self._sel is not None and self._sel.contains(pos):
             self._mode, self._sel_origin = "moving", QRect(self._sel)
@@ -636,20 +622,14 @@ class Overlay(QWidget):
         # ручки, рамка и «таблетка» с размером над левым верхним углом
         return r.adjusted(-HANDLE_HIT - 2, -34, 160, HANDLE_HIT + 2)
 
-    def _update_shape_area(self, before: QRectF) -> None:
+    def _update_shape_area(self, _before: QRectF) -> None:
         # Во время рисования перерисовываем всё выделение целиком (фигуры живут только
         # в нём). Раньше перерисовывался лишь «хвост» штриха или рамка фигуры — это быстрее,
         # но на некоторых экранах (дробный масштаб Windows, драйверы) по краям таких
         # кусочков оставалась «рябь», пропадавшая только после отпускания кнопки.
-        # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая.
-        # Фигура, вышедшая за выделение, перерисовывается с запасом вокруг себя.
-        area = self._selection_area(self._sel)
-        shape = self._current or self._drag_step
-        now = shape.bounds() if shape else QRectF()
-        for r in (before, now):
-            if not r.isEmpty() and not QRectF(area).contains(r):
-                area = area.united(r.toAlignedRect().adjusted(-GAP, -GAP, GAP, GAP))
-        self.update(area)
+        # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая,
+        # а за рамкой ничего не рисуется — там и обновлять нечего.
+        self.update(self._selection_area(self._sel))
 
     def _update_hover(self, old: QPoint) -> None:
         """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
@@ -905,18 +885,18 @@ class Overlay(QWidget):
             return
 
         # Фигуры обрезаются по границе выделения — ровно так, как попадут в файл
+        # Всё обрезается по рамке выделения — ровно так, как попадёт в файл
         p.save()
         p.setClipRect(self._sel, Qt.ClipOperation.IntersectClip)
         if self._history.shapes and self._sel.intersects(exposed):
             p.drawPixmap(0, 0, self._ensure_layer())
-        p.restore()
-        # Рисуемая сейчас фигура видна и за выделением: после отпускания оно расширится
         if self._current:
             self._current.paint(p)
         if self._drag_step:
             self._drag_step.paint(p)
         if self._editing:
             self._paint_text_editor(p)
+        p.restore()
 
         self._paint_frame(p)
         self._paint_size_label(p)

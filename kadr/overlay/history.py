@@ -1,14 +1,13 @@
 """История действий рисования (undo / redo).
 
-Действие — добавление фигуры (возможно, с расширением выделения, если фигура
-вышла за его край) или перемещение нумерованного шага. Новое действие очищает
-стек redo, как в любом редакторе.
+Действие — добавление фигуры или перемещение нумерованного шага. Новое действие
+очищает стек redo, как в любом редакторе.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRect
+from PySide6.QtCore import QPointF
 
 from .shapes import Shape
 
@@ -19,8 +18,6 @@ class Action:
     kind: str = "add"                  # add | move
     old_pos: QPointF | None = None     # move: откуда и куда
     new_pos: QPointF | None = None
-    sel_before: QRect | None = None    # add: выделение до расширения (None — не менялось)
-    sel_after: QRect | None = None
 
 
 class History:
@@ -33,9 +30,9 @@ class History:
     def shapes(self) -> list[Shape]:
         return self._shapes
 
-    def push(self, shape: Shape, sel_before: QRect | None = None, sel_after: QRect | None = None) -> None:
+    def push(self, shape: Shape) -> None:
         self._shapes.append(shape)
-        self._record(Action(shape, sel_before=sel_before, sel_after=sel_after))
+        self._record(Action(shape))
 
     def push_move(self, shape: Shape, old_pos: QPointF, new_pos: QPointF) -> None:
         """Фигура уже передвинута — только запоминаем, чтобы можно было отменить."""

@@ -427,27 +427,30 @@ def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
 
 
 # ------------------------------------------------ рисование за выделением, шаги, закреплённый снимок
-def test_drawing_outside_selection_grows_it_and_undo_restores(qapp):
+def test_drawing_outside_selection_keeps_it_and_clips(qapp):
+    """Рисовать можно начать и за рамкой, но рамка не меняется: в файл попадает только
+    то, что внутри. Текст и номер шага за рамкой не ставятся (их не было бы видно)."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (300, 250))
     sel0 = QRect(o._sel)
-    o.set_tool(Tool.RECT)
-    _drag(o, (250, 200), (400, 350))                     # фигура выходит за правый нижний край
-    assert o._sel.contains(QRect(250, 200, 150, 150)) and o._sel.topLeft() == sel0.topLeft()
-    grown = QRect(o._sel)
-    img = o.render_selection()
-    assert img.width() == grown.width() * 2              # в файл попадает вся фигура
+    o._set_color(QColor("#0000FF"))
+    o.set_tool(Tool.LINE)
+    _drag(o, (400, 175), (200, 175))                     # линия «с края» внутрь рамки
     o.set_tool(Tool.PEN)
     _drag(o, (20, 30), (60, 40))                         # штрих целиком снаружи
-    assert o._sel.contains(QPoint(20, 30))
+    assert o._sel == sel0 and len(o._history.shapes) == 2
+    img = o.render_selection()
+    assert (img.width(), img.height()) == (sel0.width() * 2, sel0.height() * 2)
+    assert img.pixelColor((250 - 100) * 2, (175 - 100) * 2).blue() > 200   # часть внутри — в файле
+    for tool in (Tool.TEXT, Tool.STEP):
+        o.set_tool(tool)
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 400))
+        o._commit_text()
+    assert len(o._history.shapes) == 2 and o._editing is None
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == grown
-    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == sel0 and not o._history.shapes      # отмена возвращает прежнее выделение
-    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == grown
+    assert o._sel == sel0 and len(o._history.shapes) == 1
     o.close()
 
 
