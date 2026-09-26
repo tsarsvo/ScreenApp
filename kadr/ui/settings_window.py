@@ -447,41 +447,50 @@ class SettingsWindow(QWidget):
     # ------------------------------------------------------------------ admin
     def _build_admin_row(self, card) -> None:
         self._divider(card)
-        self.admin_btn = QPushButton("Перезапустить с правами администратора")
-        self.admin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.admin_btn.clicked.connect(self._restart_as_admin)
+        self.admin_toggle = ToggleSwitch()
+        self.admin_toggle.setChecked(self.store.data.run_as_admin)
+        self._toggles.append(self.admin_toggle)
+        self.admin_toggle.toggled.connect(self._set_admin)
+        self._row(card, "Права администратора", self.admin_toggle,
+                  "Чтобы снимать Диспетчер задач и программы, запущенные от администратора")
         self.admin_status = QLabel("")
         self.admin_status.setWordWrap(True)
         self.admin_status.setObjectName("Muted")
         self.admin_status.setStyleSheet("font-size: 11px;")
-        hint = QLabel("Позволяет снимать Диспетчер задач и другие программы, запущенные от имени "
-                      "администратора. Windows спросит разрешение; права действуют до выхода из Kadr.")
-        hint.setWordWrap(True)
-        hint.setObjectName("Muted")
-        hint.setStyleSheet("font-size: 11px;")
-        card.addWidget(QLabel("Программы администратора"))
-        card.addWidget(hint)
-        row = QHBoxLayout()
-        row.addWidget(self.admin_btn)
-        row.addStretch(1)
-        card.addLayout(row)
         card.addWidget(self.admin_status)
-        if admin.is_elevated():
-            self.admin_btn.setEnabled(False)
-            self.admin_status.setText("Kadr уже работает с правами администратора ✓")
-        else:
-            self.admin_status.hide()
+        self._show_admin_status()
 
-    def _restart_as_admin(self) -> None:
-        self.store.flush()
-        if admin.relaunch_as_admin():
-            self.restarting.emit()
+    def _show_admin_status(self, error: str = "") -> None:
+        on, elevated = self.store.data.run_as_admin, admin.is_elevated()
+        if error:
+            text = error
+        elif on and elevated:
+            text = "Работает с правами администратора ✓  Windows спрашивает разрешение при каждом запуске Kadr."
+        elif elevated:
+            text = "Сейчас Kadr ещё работает с правами администратора — они отключатся после перезапуска."
         else:
-            self.admin_status.setObjectName("Error")
-            self.admin_status.setStyleSheet("")
-            self.admin_status.style().polish(self.admin_status)
-            self.admin_status.setText("Windows не дала разрешение — Kadr работает как раньше.")
-            self.admin_status.show()
+            text = ""
+        self.admin_status.setObjectName("Error" if error else "Muted")
+        self.admin_status.setStyleSheet("" if error else "font-size: 11px;")
+        self.admin_status.style().polish(self.admin_status)
+        self.admin_status.setText(text)
+        self.admin_status.setVisible(bool(text))
+
+    def _set_admin(self, enabled: bool) -> None:
+        self.store.set("run_as_admin", enabled)
+        if enabled and not admin.is_elevated():
+            self.store.flush()
+            if admin.relaunch_as_admin():
+                self.restarting.emit()          # новая копия с правами уже запускается
+                return
+            # В запросе Windows нажали «Нет» — тумблер возвращается
+            self.store.set("run_as_admin", False)
+            self.admin_toggle.blockSignals(True)
+            self.admin_toggle.setChecked(False)
+            self.admin_toggle.blockSignals(False)
+            self._show_admin_status("Windows не дала разрешение — Kadr работает как раньше.")
+            return
+        self._show_admin_status()
 
     def _build_update_row(self, card) -> None:
         self._divider(card)

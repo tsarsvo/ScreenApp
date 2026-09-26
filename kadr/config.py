@@ -49,6 +49,7 @@ class Settings:
     quality: int = 90                  # 1..100, используется для jpg/webp
     show_cursor: bool = False
     autostart: bool = False
+    run_as_admin: bool = False         # Windows: запускаться с правами администратора
     notify_on_save: bool = True
     history_enabled: bool = True       # хранить последние снимки для меню «Недавние»
     check_updates: bool = True         # раз в сутки спрашивать GitHub о новой версии

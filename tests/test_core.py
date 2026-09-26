@@ -678,9 +678,9 @@ def test_no_guides_or_hint_while_selection_is_being_dragged(qapp):
     o.close()
 
 
-def test_settings_restart_as_admin(qapp, tmp_path, monkeypatch):
-    """Кнопка «Перезапустить с правами администратора»: при согласии Windows текущая копия
-    закрывается, при отказе остаётся и показывает понятное сообщение."""
+def test_settings_admin_toggle(qapp, tmp_path, monkeypatch):
+    """Тумблер «Права администратора»: включение перезапускает Kadr с правами и сохраняется;
+    отказ в запросе Windows возвращает тумблер; выключение просто сохраняется."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
     from kadr import admin
@@ -690,24 +690,65 @@ def test_settings_restart_as_admin(qapp, tmp_path, monkeypatch):
 
     monkeypatch.setattr(admin, "supported", lambda: True)
     monkeypatch.setattr(admin, "is_elevated", lambda: False)
-    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
+    store = SettingsStore()
+    w = SettingsWindow(store, ThemeManager("light"))
     restarted = []
     w.restarting.connect(lambda: restarted.append(True))
+    assert not w.admin_toggle.isChecked()
 
-    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: False)     # нажали «Нет» в запросе Windows
-    w.admin_btn.click()
-    assert not restarted and "не дала разрешение" in w.admin_status.text()
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda *a: False)   # нажали «Нет» в запросе Windows
+    w.admin_toggle.click()
+    assert not restarted and not w.admin_toggle.isChecked() and not store.data.run_as_admin
+    assert "не дала разрешение" in w.admin_status.text()
 
-    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: True)
-    w.admin_btn.click()
-    assert restarted
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda *a: True)
+    w.admin_toggle.click()
+    assert restarted and store.data.run_as_admin                        # сохраняется на следующие запуски
     w.close()
 
-    monkeypatch.setattr(admin, "is_elevated", lambda: True)             # уже с правами администратора
-    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
-    assert not w.admin_btn.isEnabled() and "уже работает" in w.admin_status.text()
+    monkeypatch.setattr(admin, "is_elevated", lambda: True)              # новая копия — уже с правами
+    w = SettingsWindow(store, ThemeManager("light"))
+    assert w.admin_toggle.isChecked() and "Работает с правами" in w.admin_status.text()
+    w.admin_toggle.click()                                               # выключили
+    assert not store.data.run_as_admin and "после перезапуска" in w.admin_status.text()
     w.close()
 
+
+def test_elevate_at_start_decision(monkeypatch):
+    from kadr import admin
+
+    monkeypatch.setattr(admin, "supported", lambda: True)
+    monkeypatch.setattr(admin, "is_elevated", lambda: False)
+    assert admin.should_elevate_at_start([], wanted=True)
+    assert not admin.should_elevate_at_start([], wanted=False)
+    assert not admin.should_elevate_at_start(["--restarted"], wanted=True)   # без запуска по кругу
+    monkeypatch.setattr(admin, "is_elevated", lambda: True)
+    assert not admin.should_elevate_at_start([], wanted=True)
+
+
+def test_topmost_task_manager_hidden_during_selection_and_restored(monkeypatch):
+    """Диспетчер задач «поверх всех» прячется на время выделения и возвращается."""
+    import types
+
+    from kadr import topmost
+
+    state = {"visible": True, "shown_with": None}
+    user32 = types.SimpleNamespace(
+        FindWindowW=lambda cls, _t: 77 if cls == "TaskManagerWindow" else 0,
+        IsWindowVisible=lambda h: state["visible"],
+        GetWindowLongW=lambda h, i: 0x8,                 # WS_EX_TOPMOST
+        ShowWindow=lambda h, cmd: state.update(visible=cmd != 0, shown_with=cmd),
+        IsWindow=lambda h: True,
+    )
+    monkeypatch.setattr(topmost.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "ctypes", types.SimpleNamespace(windll=types.SimpleNamespace(user32=user32)))
+    hidden = topmost.hide_over_overlay()
+    assert hidden == [77] and not state["visible"]
+    topmost.restore(hidden)
+    assert state["visible"] and state["shown_with"] == 8           # SW_SHOWNA — без кражи фокуса
+
+    user32.GetWindowLongW = lambda h, i: 0                         # обычное окно — не трогаем
+    assert topmost.hide_over_overlay() == [] and state["visible"]
 
 def test_admin_restart_command_line(monkeypatch):
     """Новая копия получает флаг --restarted (ждёт, пока старая закроется)."""
@@ -720,6 +761,6 @@ def test_admin_restart_command_line(monkeypatch):
     monkeypatch.setattr(admin, "supported", lambda: True)
     monkeypatch.setattr(admin, "launch_command", lambda: [r"C:\Program Files\Kadr\Kadr.exe"])
     monkeypatch.setitem(sys.modules, "ctypes", types.SimpleNamespace(windll=types.SimpleNamespace(shell32=shell32)))
-    assert admin.relaunch_as_admin()
+    assert admin.relaunch_as_admin(["--region"])
     _, verb, exe, params, _, show = calls[0]
-    assert (verb, exe, params, show) == ("runas", r"C:\Program Files\Kadr\Kadr.exe", '"--restarted"', 1)
+    assert (verb, exe, params, show) == ("runas", r"C:\Program Files\Kadr\Kadr.exe", '"--region" "--restarted"', 1)
