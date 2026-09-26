@@ -39,7 +39,11 @@ jobs:
       # Сразу, до долгой сборки: без раздела версии в CHANGELOG.md релиз не выпускается
       - name: Описание релиза из CHANGELOG.md
         if: startsWith(github.ref, 'refs/tags/v') || env.KADR_VERSION != ''
-        run: python scripts/release_notes.py ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || env.KADR_VERSION }} release_notes.md
+        # Номер — через переменную окружения, а не подстановкой в команду: имя тега не может
+        # стать частью команды (защита от внедрения кода через имя тега)
+        env:
+          RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || env.KADR_VERSION }}
+        run: python scripts/release_notes.py "$env:RELEASE_VERSION" release_notes.md
 
       - uses: actions/setup-python@v5
         with:

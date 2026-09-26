@@ -543,7 +543,7 @@ class SettingsWindow(QWidget):
 
     # ----------------------------------------------------------------- palette
     def _refresh_palette(self) -> None:
-        for b, color in zip(self._pal_buttons, self.store.data.palette):
+        for b, color in zip(self._pal_buttons, self.store.data.palette, strict=True):
             b.ring = QColor(self.theme.tokens.accent)
             b.set_color(color)
 

@@ -22,6 +22,7 @@
 <a href="https://github.com/tsarsvo/ScreenApp/releases/latest"><img src="https://img.shields.io/github/release-date/tsarsvo/ScreenApp?label=%D0%B2%D1%8B%D1%88%D0%BB%D0%B0&color=3F6BFF&cacheSeconds=300" alt="Дата выхода"></a>
 <a href="https://github.com/tsarsvo/ScreenApp/releases"><img src="https://img.shields.io/github/downloads/tsarsvo/ScreenApp/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D0%B9&color=3F6BFF&cacheSeconds=300" alt="Скачиваний"></a>
 <a href="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml"><img src="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml/badge.svg" alt="Windows build"></a>
+<a href="https://github.com/tsarsvo/ScreenApp/actions/workflows/codeql.yml"><img src="https://github.com/tsarsvo/ScreenApp/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
 <img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey?logo=qt&logoColor=white" alt="Платформы">
 <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
 <img src="https://img.shields.io/badge/PySide6-Qt%206-41CD52?logo=qt&logoColor=white" alt="PySide6">
@@ -307,7 +308,13 @@ ScreenApp/
 ├── install_windows.bat            установка из исходников двойным кликом
 ├── tests/                         pytest, работают без дисплея
 ├── CHANGELOG.md                   история изменений
-└── .github/workflows/windows.yml  тесты, сборка, проверка exe и релизы
+├── SECURITY.md                    политика безопасности и как сообщить об уязвимости
+├── pyproject.toml                 настройки проверки кода (ruff)
+├── .github/dependabot.yml         еженедельные обновления зависимостей
+└── .github/workflows/
+    ├── windows.yml                тесты, сборка, проверка exe и релизы
+    ├── codeql.yml                 сканирование кода CodeQL (security-and-quality)
+    └── quality.yml                ruff: ошибки, частые баги, правила безопасности
 ```
 
 </details>
@@ -324,7 +331,10 @@ QT_QPA_PLATFORM=offscreen python -m pytest -q    # все тесты, диспл
 python scripts/fetch_ffmpeg.py                    # Windows: FFmpeg в kadr/bin
 python scripts/build.py                           # dist/Kadr-Setup.exe и dist/Kadr-portable.zip
 python scripts/make_screenshots.py                # обновить картинки в docs/ после изменений интерфейса
+pip install ruff && ruff check .                  # проверка кода (то же, что в CI)
 ```
+
+Безопасность: [SECURITY.md](SECURITY.md) — как устроена защита и как приватно сообщить об уязвимости.
 
 Каждый пуш и PR проверяются на Windows: тесты, сборка и **сквозной прогон настоящего `Kadr.exe`** — скриншот в WEBP, запись и сохранение повтора, отсутствие «зависших» FFmpeg после «Снять задачу».
 

@@ -1,0 +1,41 @@
+# Сканирование кода CodeQL: уязвимости и проблемы качества в Python-коде и в самих
+# сценариях GitHub Actions. Результаты — во вкладке Security → Code scanning.
+# Важно: в настройках репозитория у Code scanning должна быть выбрана не «Default setup»,
+# а эта «расширенная» настройка (иначе GitHub не примет результаты).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"      # раз в неделю — новые правила CodeQL проверяют и старый код
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Анализ (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # загрузить результаты в Security → Code scanning
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

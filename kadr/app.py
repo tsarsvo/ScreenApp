@@ -1,6 +1,7 @@
 """Контроллер приложения: трей, одна копия, горячие клавиши, запуск захвата."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import getpass
 import json
@@ -256,10 +257,8 @@ class KadrApp(QObject):
     def _sync_autostart(self) -> None:
         """Если автозапуск включён — обновляем запись (путь к приложению мог измениться)."""
         if self.store.data.autostart:
-            try:
+            with contextlib.suppress(OSError):
                 autostart.set_enabled(True)
-            except OSError:
-                pass
 
     def open_settings(self) -> None:
         if self.settings_window is None:

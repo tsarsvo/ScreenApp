@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import plistlib
 import sys
@@ -39,10 +40,8 @@ def _win_set(enabled: bool) -> None:
             cmd = " ".join(f'"{a}"' for a in launch_command())
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cmd)
         else:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 winreg.DeleteValue(key, APP_NAME)
-            except FileNotFoundError:
-                pass
 
 
 def _win_get() -> bool:

@@ -1,0 +1,26 @@
+# Быстрая проверка качества кода на каждый пуш и PR (секунды, без сборки):
+# ruff — ошибки, частые баги, устаревший синтаксис и правила безопасности (bandit).
+# Настройки — в pyproject.toml. Тесты и сборка — в windows.yml.
+name: Quality
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ruff
+        run: |
+          python -m pip install ruff==0.15.8
+          ruff check --output-format=github .
