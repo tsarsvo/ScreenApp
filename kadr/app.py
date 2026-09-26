@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QI
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import APP_ID, APP_NAME, __version__, autostart, icons
+from . import APP_ID, APP_NAME, __version__, admin, autostart, icons
 from .capture import grab_full_desktop, grab_screens
 from .config import SettingsStore
 from .hotkeys import HotkeyManager, label_for
@@ -264,6 +264,7 @@ class KadrApp(QObject):
             self.settings_window = SettingsWindow(self.store, self.theme, self.replay, self.updater)
             self.settings_window.hotkey_recording.connect(self._on_hotkey_recording)
             self.settings_window.uninstall_done.connect(self.qapp.quit)
+            self.settings_window.restarting.connect(self.qapp.quit)   # новая копия уже запущена
             self.settings_window.show_hotkey_error(
                 "; ".join(e for e in self._hotkey_errors.values() if e))
         self.settings_window.present()
@@ -458,7 +459,10 @@ def main() -> int:
     qapp.setWindowIcon(icons.logo_icon())
 
     lock = _instance_lock()
-    if not lock.tryLock(0):
+    # Перезапуск с правами администратора: прежняя копия ещё закрывается — ждём её,
+    # а не передаём команду ей же
+    wait_ms = 10_000 if admin.RESTARTED_FLAG in args else 0
+    if not lock.tryLock(wait_ms):
         # Уже запущено: только передаём команду. Вторую копию не поднимаем никогда —
         # иначе `Kadr.exe --full` при занятой первой копии остался бы висеть в трее.
         return 0 if _send_to_running(cmd or "settings", timeout_ms=10_000) else 1
@@ -484,6 +488,8 @@ def main() -> int:
 
     QLocalServer.removeServer(_server_name())  # на случай «зависшего» сокета после сбоя
     server = QLocalServer()
+    # Kadr с правами администратора должен принимать команды и от обычного запуска
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
     server.listen(_server_name())
 
     def on_connection():

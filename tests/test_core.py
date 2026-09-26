@@ -645,3 +645,78 @@ def _max_channel_diff(a, b) -> int:
     if da == db:
         return 0
     return max(abs(x - y) for x, y in zip(da, db) if x != y)
+
+
+def test_no_guides_or_hint_while_selection_is_being_dragged(qapp):
+    """Нажали ЛКМ и тянем: направляющие и подсказка «Выделите область» должны исчезнуть
+    сразу при нажатии. Раньше выделение 0×0 в момент нажатия считалось «пустым», и они
+    рисовались заново, а при протяжке стирались только там, где прошло выделение."""
+    o = _overlay(qapp)
+    o._dim = 1.0
+
+    def grab():                     # то, что сейчас нарисовано на оверлее
+        img = QImage(o.size(), QImage.Format.Format_RGB32)
+        o.render(img)
+        return img
+
+    bg = lambda img, x, y: img.pixelColor(x, y).name()               # noqa: E731
+    QTest.mouseMove(o, QPoint(200, 200))
+    img = grab()
+    assert bg(img, 600, 200) != bg(img, 600, 260)                     # до нажатия направляющие есть
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 200))
+    img = grab()
+    assert bg(img, 600, 200) == bg(img, 600, 260)                     # горизонтальная направляющая пропала
+    assert bg(img, 200, 500) == bg(img, 260, 500)                     # и вертикальная
+    assert bg(img, 400, 39) == bg(img, 400, 300)                      # и подсказка сверху
+    QTest.mouseMove(o, QPoint(260, 240))
+    img = grab()
+    assert bg(img, 600, 200) == bg(img, 600, 260) and bg(img, 400, 39) == bg(img, 400, 300)
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(260, 240))
+    o.close()
+
+
+def test_settings_restart_as_admin(qapp, tmp_path, monkeypatch):
+    """Кнопка «Перезапустить с правами администратора»: при согласии Windows текущая копия
+    закрывается, при отказе остаётся и показывает понятное сообщение."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from kadr import admin
+    from kadr.config import SettingsStore
+    from kadr.theme import ThemeManager
+    from kadr.ui.settings_window import SettingsWindow
+
+    monkeypatch.setattr(admin, "supported", lambda: True)
+    monkeypatch.setattr(admin, "is_elevated", lambda: False)
+    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
+    restarted = []
+    w.restarting.connect(lambda: restarted.append(True))
+
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: False)     # нажали «Нет» в запросе Windows
+    w.admin_btn.click()
+    assert not restarted and "не дала разрешение" in w.admin_status.text()
+
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: True)
+    w.admin_btn.click()
+    assert restarted
+    w.close()
+
+    monkeypatch.setattr(admin, "is_elevated", lambda: True)             # уже с правами администратора
+    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
+    assert not w.admin_btn.isEnabled() and "уже работает" in w.admin_status.text()
+    w.close()
+
+
+def test_admin_restart_command_line(monkeypatch):
+    """Новая копия получает флаг --restarted (ждёт, пока старая закроется)."""
+    import types
+
+    from kadr import admin
+
+    calls = []
+    shell32 = types.SimpleNamespace(ShellExecuteW=lambda *a: calls.append(a) or 42)
+    monkeypatch.setattr(admin, "supported", lambda: True)
+    monkeypatch.setattr(admin, "launch_command", lambda: [r"C:\Program Files\Kadr\Kadr.exe"])
+    monkeypatch.setitem(sys.modules, "ctypes", types.SimpleNamespace(windll=types.SimpleNamespace(shell32=shell32)))
+    assert admin.relaunch_as_admin()
+    _, verb, exe, params, _, show = calls[0]
+    assert (verb, exe, params, show) == ("runas", r"C:\Program Files\Kadr\Kadr.exe", '"--restarted"', 1)

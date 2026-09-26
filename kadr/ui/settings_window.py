@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (QColorDialog, QComboBox, QFileDialog, QMessageBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, __version__, autostart, icons, uninstall
+from .. import APP_NAME, __version__, admin, autostart, icons, uninstall
 from ..config import DEFAULT_PALETTE, SettingsStore
 from ..hotkeys import Hotkey
 from ..theme import ThemeManager, settings_stylesheet
@@ -19,6 +19,7 @@ class SettingsWindow(QWidget):
     hotkey_recording = Signal(bool)   # приложение отключает глобальные хоткеи на время записи
     _mics_loaded = Signal(list)        # из фонового потока → GUI
     uninstall_done = Signal()          # приложение должно завершиться
+    restarting = Signal()              # запущена копия с правами администратора — эта закрывается
 
     def __init__(self, store: SettingsStore, theme: ThemeManager, replay=None, updater=None) -> None:
         super().__init__(None, Qt.WindowType.Window)
@@ -176,6 +177,8 @@ class SettingsWindow(QWidget):
         self.autostart_error.hide()
         self._row(card, "Запускать при входе в систему", self.autostart)
         card.addWidget(self.autostart_error)
+        if admin.supported():
+            self._build_admin_row(card)
         self._divider(card)
         self.theme_box = QComboBox()
         for key, text in (("system", "Как в системе"), ("light", "Светлая"), ("dark", "Тёмная")):
@@ -441,6 +444,45 @@ class SettingsWindow(QWidget):
             self.autostart_error.show()
 
     # ----------------------------------------------------------------- updates
+    # ------------------------------------------------------------------ admin
+    def _build_admin_row(self, card) -> None:
+        self._divider(card)
+        self.admin_btn = QPushButton("Перезапустить с правами администратора")
+        self.admin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.admin_btn.clicked.connect(self._restart_as_admin)
+        self.admin_status = QLabel("")
+        self.admin_status.setWordWrap(True)
+        self.admin_status.setObjectName("Muted")
+        self.admin_status.setStyleSheet("font-size: 11px;")
+        hint = QLabel("Позволяет снимать Диспетчер задач и другие программы, запущенные от имени "
+                      "администратора. Windows спросит разрешение; права действуют до выхода из Kadr.")
+        hint.setWordWrap(True)
+        hint.setObjectName("Muted")
+        hint.setStyleSheet("font-size: 11px;")
+        card.addWidget(QLabel("Программы администратора"))
+        card.addWidget(hint)
+        row = QHBoxLayout()
+        row.addWidget(self.admin_btn)
+        row.addStretch(1)
+        card.addLayout(row)
+        card.addWidget(self.admin_status)
+        if admin.is_elevated():
+            self.admin_btn.setEnabled(False)
+            self.admin_status.setText("Kadr уже работает с правами администратора ✓")
+        else:
+            self.admin_status.hide()
+
+    def _restart_as_admin(self) -> None:
+        self.store.flush()
+        if admin.relaunch_as_admin():
+            self.restarting.emit()
+        else:
+            self.admin_status.setObjectName("Error")
+            self.admin_status.setStyleSheet("")
+            self.admin_status.style().polish(self.admin_status)
+            self.admin_status.setText("Windows не дала разрешение — Kadr работает как раньше.")
+            self.admin_status.show()
+
     def _build_update_row(self, card) -> None:
         self._divider(card)
         self.update_btn = QPushButton("Проверить обновления")

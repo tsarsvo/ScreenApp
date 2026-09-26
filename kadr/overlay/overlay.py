@@ -211,7 +211,7 @@ class Overlay(QWidget):
     def select_all(self) -> None:
         """Ctrl+A — выделить весь экран."""
         self._commit_text()
-        if not self._sel:
+        if self._sel is None:
             self.selection_started.emit(self)
         self._sel = QRect(self.rect())
         self._mode = "idle"
@@ -327,15 +327,15 @@ class Overlay(QWidget):
 
     # ------------------------------------------------------------- actions
     def _copy(self) -> None:
-        if self._sel:
+        if self._sel is not None:
             self.copy_requested.emit(self.render_selection())
 
     def _save(self) -> None:
-        if self._sel:
+        if self._sel is not None:
             self.save_requested.emit(self.render_selection())
 
     def _pin(self) -> None:
-        if self._sel:
+        if self._sel is not None:
             self.pin_requested.emit(self.render_selection(), self.mapToGlobal(self._sel.topLeft()), self._shot.dpr)
 
     def _toggle_popup(self) -> None:
@@ -355,7 +355,7 @@ class Overlay(QWidget):
         above = tb.top() + SHADOW - GAP - self.popup.height() + SHADOW
         fits_below = below + self.popup.height() - SHADOW <= self.height()
         # Открываем в сторону «от выделения», чтобы не закрывать скриншот
-        toolbar_above_sel = self._sel and tb.center().y() < self._sel.center().y()
+        toolbar_above_sel = self._sel is not None and tb.center().y() < self._sel.center().y()
         if fits_below and not (toolbar_above_sel and above >= -SHADOW):
             pos, offset = QPoint(x, below), QPoint(0, -6)
         else:
@@ -400,7 +400,7 @@ class Overlay(QWidget):
         return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in _HANDLES]
 
     def _hit_handle(self, pos: QPoint) -> str | None:
-        if not self._sel:
+        if self._sel is None:
             return None
         for hid, pt in self._handle_points():
             if abs(pt.x() - pos.x()) <= HANDLE_HIT and abs(pt.y() - pos.y()) <= HANDLE_HIT:
@@ -409,7 +409,7 @@ class Overlay(QWidget):
 
     def _step_at(self, pos: QPoint) -> StepShape | None:
         """Нумерованный шаг, за кружок которого можно взяться (верхний — первым)."""
-        if not self._sel or self._mode == "drawing":
+        if self._sel is None or self._mode == "drawing":
             return None
         pt = QPointF(pos)
         for s in reversed(self._history.shapes):
@@ -419,7 +419,7 @@ class Overlay(QWidget):
 
     def _place_toolbar(self) -> None:
         """Панель рядом с выделением, не перекрывая его: снизу → сверху → внутри (крайний случай)."""
-        if not self._sel:
+        if self._sel is None:
             return
         self.toolbar.adjustSize()
         tw, th = self.toolbar.width(), self.toolbar.height()
@@ -447,7 +447,7 @@ class Overlay(QWidget):
         self.popup.hide()
         if e.button() == Qt.MouseButton.RightButton:
             # ПКМ: сбросить выделение, а если его нет — закрыть оверлей
-            if self._sel and not self._history and not self._editing:
+            if self._sel is not None and not self._history and not self._editing:
                 self.reset_selection()
             else:
                 self.cancelled.emit()
@@ -469,14 +469,14 @@ class Overlay(QWidget):
             self._drag_offset = step.pos - QPointF(e.position())
             self._invalidate_layer(QRectF(self._shape_rect(step)))
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif self._sel and self._tool != Tool.SELECT:
+        elif self._sel is not None and self._tool != Tool.SELECT:
             # рисовать можно и за пределами выделения — оно расширится до фигуры
             self._start_drawing(QPointF(e.position()))
-        elif self._sel and self._sel.contains(pos):
+        elif self._sel is not None and self._sel.contains(pos):
             self._mode, self._sel_origin = "moving", QRect(self._sel)
             self.toolbar.hide()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif not self._sel or (self._tool == Tool.SELECT and not self._history):
+        elif self._sel is None or (self._tool == Tool.SELECT and not self._history):
             # Новое выделение (если на старом ещё ничего не нарисовано)
             self._mode = "selecting"
             self._sel = QRect(pos, QSize(0, 0))
@@ -493,7 +493,7 @@ class Overlay(QWidget):
         if self._picking:
             self.update()
             return
-        old_sel = QRect(self._sel) if self._sel else None
+        old_sel = QRect(self._sel) if self._sel is not None else None
         if self._mode == "selecting":
             end = self._constrain_square(self._press, pos) if shift else pos
             self._sel = QRect(self._press, end).normalized().intersected(bounds)
@@ -599,7 +599,7 @@ class Overlay(QWidget):
             self.setCursor(_HANDLE_CURSORS[handle])
         elif self._step_at(pos):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
-        elif self._sel and self._sel.contains(pos):
+        elif self._sel is not None and self._sel.contains(pos):
             if self._tool == Tool.SELECT:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             elif self._tool == Tool.TEXT:
@@ -654,7 +654,7 @@ class Overlay(QWidget):
     def _update_hover(self, old: QPoint) -> None:
         """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
         иначе перерисовывать нечего (кроме подсказки толщины)."""
-        if not self._sel:
+        if self._sel is None:
             w, h = self.width(), self.height()
             k = GUIDE_PAD
             for pt in (old, self._mouse):
@@ -837,9 +837,9 @@ class Overlay(QWidget):
             self.select_all()
         elif ctrl and _is_key(e, Qt.Key.Key_T):
             self._pin()
-        elif self._sel and not ctrl and _is_key(e, Qt.Key.Key_I):
+        elif self._sel is not None and not ctrl and _is_key(e, Qt.Key.Key_I):
             self.start_picking()
-        elif self._sel and not ctrl:
+        elif self._sel is not None and not ctrl:
             for key, tool in _TOOL_KEYS.items():
                 if _is_key(e, key):
                     self.set_tool(tool)
@@ -899,7 +899,7 @@ class Overlay(QWidget):
             p.fillRect(self.rect(), dim)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
 
-        if not self._sel:
+        if self._sel is None:
             self._paint_guides(p)
             self._paint_hint(p)
             return
