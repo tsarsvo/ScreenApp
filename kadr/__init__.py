@@ -2,7 +2,7 @@
 
 APP_NAME = "Kadr"
 APP_ID = "app.kadr.screenshot"
-DEFAULT_VERSION = "1.2.4"
+DEFAULT_VERSION = "1.2.5"
 
 try:
     # Файл создаёт scripts/build.py из git-тега релиза (v1.2.3 → "1.2.3")

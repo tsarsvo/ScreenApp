@@ -764,3 +764,78 @@ def test_admin_restart_command_line(monkeypatch):
     assert admin.relaunch_as_admin(["--region"])
     _, verb, exe, params, _, show = calls[0]
     assert (verb, exe, params, show) == ("runas", r"C:\Program Files\Kadr\Kadr.exe", '"--region" "--restarted"', 1)
+
+
+def test_pin_drawing_mode_quick_colors_and_copy(qapp):
+    """Карандаш в углу закреплённого снимка: рисование тремя быстрыми цветами, Ctrl+Z,
+    копирование вместе с рисунком; снова карандаш — режим выключен, окно снова двигается."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(400, 200, QImage.Format.Format_RGB32)
+    img.fill(QColor("#FFFFFF"))
+    w = PinWindow(img, 2.0, QPoint(100, 100), colors=["#0000FF", "#00FF00", "#FF0000"])   # 200×100 логических
+    w.show()
+    copied = []
+    w.copy_requested.connect(copied.append)
+    w._hover = True                                        # мышь над снимком — панель видна
+
+    def mouse(kind, pt, buttons=Qt.MouseButton.LeftButton):
+        pt = QPointF(*pt)
+        btn = Qt.MouseButton.NoButton if kind == QMouseEvent.Type.MouseMove else Qt.MouseButton.LeftButton
+        qapp.sendEvent(w, QMouseEvent(kind, pt, QPointF(w.mapToGlobal(pt)), btn, buttons,
+                                      Qt.KeyboardModifier.NoModifier))
+
+    def click(r):
+        c = r.center()
+        mouse(QMouseEvent.Type.MouseButtonPress, (c.x(), c.y()))
+        mouse(QMouseEvent.Type.MouseButtonRelease, (c.x(), c.y()), Qt.MouseButton.NoButton)
+
+    ctrls = dict(w._controls())
+    assert set(ctrls) == {"pen", "copy"}                   # без режима рисования — только две кнопки
+    click(ctrls["pen"])
+    ctrls = dict(w._controls())
+    assert w._drawing and {"color0", "color1", "color2"} <= set(ctrls)
+    click(ctrls["color2"])                                 # красный
+    mouse(QMouseEvent.Type.MouseButtonPress, (20, 50))
+    mouse(QMouseEvent.Type.MouseMove, (120, 50))
+    mouse(QMouseEvent.Type.MouseButtonRelease, (120, 50), Qt.MouseButton.NoButton)
+    assert w.pos() == QPoint(100 - 1, 100 - 1)             # в режиме рисования окно не двигается
+    click(dict(w._controls())["copy"])
+    out = copied[-1]
+    assert out.size() == img.size()                        # копия в полном разрешении снимка
+    px = out.pixelColor(70 * 2, 50 * 2)                    # точка на линии (DPR 2)
+    assert px.red() > 200 and px.green() < 80
+    QTest.keyClick(w, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert w.rendered_image().pixelColor(140, 100) == QColor("#FFFFFF")   # отменили
+    click(dict(w._controls())["pen"])
+    assert not w._drawing and set(dict(w._controls())) == {"pen", "copy"}
+    w.close()
+
+
+def test_shape_outside_selection_is_visible_faded_but_not_saved(qapp):
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    o._dim = 1.0
+    _drag(o, (100, 100), (300, 250))
+    o._set_color(QColor("#FF0000"))
+    o._set_width(10)
+    o.set_tool(Tool.LINE)
+    _drag(o, (150, 175), (600, 175))                      # линия уходит далеко за правый край рамки
+
+    def shot():
+        img = QImage(o.size(), QImage.Format.Format_RGB32)
+        o.render(img)
+        return img
+
+    img = shot()
+    inside, outside, empty = img.pixelColor(200, 175), img.pixelColor(500, 175), img.pixelColor(500, 300)
+    assert inside.red() > 230 and inside.green() < 40            # внутри — как в файле
+    assert outside.red() > empty.red() + 30                      # снаружи линию видно…
+    assert outside.red() < 230 and outside.green() > 40          # …но полупрозрачной
+    saved = o.render_selection()
+    assert saved.width() == o._sel.width() * 2                   # в файл — только рамка
+    o.close()
