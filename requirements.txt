@@ -1,12 +1,12 @@
 # GUI, рендеринг, буфер обмена, трей, SVG-иконки
-PySide6>=6.5
+PySide6>=6.11.2
 # Резервный захват экрана (если Qt не смог)
-mss>=9.0
+mss>=10.2.0
 # Глобальные горячие клавиши на macOS / Linux (на Windows — нативный RegisterHotKey)
-pynput>=1.7.7
+pynput>=1.8.2
 # Резервный кодек WEBP (если в сборке Qt нет плагина qwebp)
-Pillow>=10.0
+Pillow>=12.3.0
 # macOS: скрыть иконку из Dock (приложение живёт только в строке меню)
-pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=12.2.2; sys_platform == "darwin"
 # Windows: звук системы для буфера повтора (WASAPI loopback)
-PyAudioWPatch>=0.2.12; sys_platform == "win32"
+PyAudioWPatch>=0.2.12.8; sys_platform == "win32"
