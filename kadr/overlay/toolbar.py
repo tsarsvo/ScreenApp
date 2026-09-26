@@ -177,6 +177,7 @@ class Toolbar(Panel):
         (Tool.SELECT, "cursor", "Выделение и перемещение  (V)"),
         (Tool.PEN, "pen", "Кисть  (P)"),
         (Tool.ARROW, "arrow", "Стрелка  (A)"),
+        (Tool.LINE, "line", "Линия  (L) · Shift — под 45°"),
         (Tool.RECT, "rect", "Прямоугольник  (R)"),
         (Tool.ELLIPSE, "ellipse", "Овал  (E)"),
         (Tool.TEXT, "text", "Текст  (T)"),

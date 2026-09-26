@@ -18,6 +18,7 @@ class Tool(Enum):
     SELECT = "select"
     PEN = "pen"
     ARROW = "arrow"
+    LINE = "line"
     RECT = "rect"
     ELLIPSE = "ellipse"
     TEXT = "text"
@@ -115,6 +116,16 @@ class ArrowShape(TwoPointShape):
         p.setPen(_pen(self.color, max(1.0, self.width * 0.5)))
         p.setBrush(self.color)
         p.drawPolygon(QPolygonF([tip, left, right]))
+
+
+@dataclass
+class LineShape(TwoPointShape):
+    """Прямая линия (Shift — с шагом 45°)."""
+
+    def paint(self, p: QPainter) -> None:
+        p.setPen(_pen(self.color, self.width))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(self.start, self.end)
 
 
 @dataclass
