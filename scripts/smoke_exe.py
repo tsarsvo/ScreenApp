@@ -41,6 +41,23 @@ def running(image: str) -> int:
     return sum(1 for line in out.splitlines() if line.lower().startswith(f'"{image.lower()}"'))
 
 
+def send_command(exe: Path, flag: str, env: dict, work: Path) -> None:
+    """Вторая копия Kadr передаёт команду первой и сразу завершается."""
+    t = time.monotonic()
+    proc = subprocess.Popen([str(exe), flag], env=env)
+    try:
+        code = proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        time.sleep(1)       # стеки пишутся на 15-й секунде — уже записаны
+        for dump in sorted(work.glob("hang.*")):
+            print(f"--- {dump.name}\n{dump.read_text(encoding='utf-8', errors='replace')}")
+        proc.kill()
+        raise SystemExit(f"  ✗ `Kadr.exe {flag}` не завершился за 30 с (стеки потоков выше)")
+    print(f"    Kadr.exe {flag}: код {code}, {time.monotonic() - t:.1f} с")
+    if code != 0:
+        raise SystemExit(f"  ✗ `Kadr.exe {flag}` завершился с кодом {code}")
+
+
 def main() -> None:
     exe = Path(sys.argv[1]).resolve()
     work = Path(tempfile.mkdtemp(prefix="kadr-smoke-"))
@@ -52,7 +69,7 @@ def main() -> None:
         "replay_enabled": True, "replay_minutes": 1, "replay_fps": 15, "replay_height": 720,
         "replay_system_audio": True,   # на сервере может не быть звука — проверяем, что это не ломает запись
     }), encoding="utf-8")
-    env = dict(os.environ, APPDATA=str(appdata))
+    env = dict(os.environ, APPDATA=str(appdata), KADR_HANG_DUMP=str(work / "hang"))
     replay_dir = Path(tempfile.gettempdir()) / "kadr-replay"
 
     print(f"Запуск {exe}")
@@ -63,7 +80,7 @@ def main() -> None:
             raise SystemExit(f"  ✗ Kadr.exe завершился сразу, код {app.returncode}")
         print("  ✓ Kadr.exe работает")
 
-        subprocess.run([str(exe), "--full"], env=env, timeout=30)
+        send_command(exe, "--full", env, work)
         shot = wait_for("скриншот всего экрана сохранён в WEBP (--full)",
                         lambda: next((p for p in shots.glob("Kadr_*.webp") if p.stat().st_size > 1000), None), 30)
         print(f"    {shot.name}: {shot.stat().st_size // 1024} КБ")
@@ -77,7 +94,7 @@ def main() -> None:
         if log.exists() and log.read_text(encoding="utf-8", errors="replace").strip():
             print(f"    ffmpeg.log: {log.read_text(encoding='utf-8', errors='replace')[-500:]}")
 
-        subprocess.run([str(exe), "--save-replay"], env=env, timeout=30)
+        send_command(exe, "--save-replay", env, work)
         mp4 = wait_for("повтор сохранён (--save-replay)",
                        lambda: next((p for p in shots.glob("Kadr_Replay_*.mp4") if p.stat().st_size > 1000), None),
                        60)
