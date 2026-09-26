@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Проверка номера версии
         if: env.KADR_VERSION != ''
@@ -45,7 +45,7 @@ jobs:
           RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || env.KADR_VERSION }}
         run: python scripts/release_notes.py "$env:RELEASE_VERSION" release_notes.md
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -81,7 +81,7 @@ jobs:
             if (-not (Test-Path $f)) { throw "Нет файла $f" }
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Kadr-Windows
           path: |
@@ -90,7 +90,7 @@ jobs:
 
       - name: Релиз
         if: startsWith(github.ref, 'refs/tags/v') || env.KADR_VERSION != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # При запуске из формы тег создаётся здесь же, на собранном коммите
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.KADR_VERSION) }}
