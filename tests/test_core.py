@@ -424,3 +424,126 @@ def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
     QTest.keyClick(o, Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier)
     assert got and got[0][1] == o.mapToGlobal(QPoint(100, 80)) and got[0][2] == 2.0
     o.close()
+
+
+# ------------------------------------------------ рисование за выделением, шаги, закреплённый снимок
+def test_drawing_outside_selection_grows_it_and_undo_restores(qapp):
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (300, 250))
+    sel0 = QRect(o._sel)
+    o.set_tool(Tool.RECT)
+    _drag(o, (250, 200), (400, 350))                     # фигура выходит за правый нижний край
+    assert o._sel.contains(QRect(250, 200, 150, 150)) and o._sel.topLeft() == sel0.topLeft()
+    grown = QRect(o._sel)
+    img = o.render_selection()
+    assert img.width() == grown.width() * 2              # в файл попадает вся фигура
+    o.set_tool(Tool.PEN)
+    _drag(o, (20, 30), (60, 40))                         # штрих целиком снаружи
+    assert o._sel.contains(QPoint(20, 30))
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert o._sel == grown
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert o._sel == sel0 and not o._history.shapes      # отмена возвращает прежнее выделение
+    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert o._sel == grown
+    o.close()
+
+
+def test_step_can_be_dragged_by_its_center_and_undone(qapp):
+    from PySide6.QtCore import QPointF
+
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.STEP)
+    for x in (150, 250):
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, 200))
+    first = o._history.shapes[0]
+    QTest.mouseMove(o, QPoint(152, 202))
+    assert o.cursor().shape() == Qt.CursorShape.OpenHandCursor   # над кружком — «рука»
+    _drag(o, (152, 202), (302, 322))
+    assert len(o._history.shapes) == 2                   # новый шаг не появился
+    assert first.pos == QPointF(300, 320) and first.number == 1
+    o.set_tool(Tool.SELECT)
+    _drag(o, (302, 322), (1000, 1000))                   # и в режиме «Выделение»; наружу не уходит
+    assert o._sel.contains(first.pos.toPoint())
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert first.pos == QPointF(300, 320)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert first.pos == QPointF(150, 200) and len(o._history.shapes) == 2
+    o.close()
+
+
+def test_guides_do_not_stay_behind(qapp):
+    from PySide6.QtCore import QEvent
+
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    o = _overlay(qapp)
+    qapp.sendEvent(o, QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(200, 200), QPointF(200, 200),
+                                  Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+    assert o._mouse == QPoint(200, 200)
+    qapp.sendEvent(o, QEvent(QEvent.Type.Leave))         # мышь ушла на другой монитор
+    assert not o.rect().contains(o._mouse)
+    o.close()
+
+
+def test_handle_cursor_under_toolbar_shadow(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (300, 250))
+    o.toolbar.move_now(o.toolbar._slide.endValue())    # анимация появления закончилась
+    br = QPoint(o._sel.right(), o._sel.bottom() + 4)     # в зоне ручки правого нижнего угла
+    assert o._hit_handle(br) == "br"
+    assert o.toolbar.geometry().contains(br)             # …и на прозрачном поле тени панели
+
+    def hover(widget, pt):
+        pt = QPointF(pt)
+        qapp.sendEvent(widget, QMouseEvent(QMouseEvent.Type.MouseMove, pt, QPointF(widget.mapToGlobal(pt)),
+                                           Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                           Qt.KeyboardModifier.NoModifier))
+
+    hover(o, QPoint(200, 200))
+    assert o.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    hover(o.toolbar, o.toolbar.mapFrom(o, br))           # движение приходит панели, а не оверлею
+    assert o.cursor().shape() == Qt.CursorShape.SizeFDiagCursor
+    o.close()
+
+
+def test_pin_resize_by_edge_keeps_aspect(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(200, 100, QImage.Format.Format_RGB32)
+    img.fill(QColor("#3F6BFF"))
+    w = PinWindow(img, 1.0, QPoint(100, 100))
+    w.show()
+    geo = w.geometry()
+
+    def send(kind, local, buttons):
+        g = QPointF(w.mapToGlobal(local))
+        btn = Qt.MouseButton.LeftButton if kind != QMouseEvent.Type.MouseMove else Qt.MouseButton.NoButton
+        qapp.sendEvent(w, QMouseEvent(kind, QPointF(local), g, btn, buttons, Qt.KeyboardModifier.NoModifier))
+
+    L = Qt.MouseButton.LeftButton
+    # правый край тянем на 100 px вправо → вдвое шире, пропорции сохранены
+    send(QMouseEvent.Type.MouseMove, QPoint(w.width() - 2, 50), Qt.MouseButton.NoButton)
+    assert w.cursor().shape() == Qt.CursorShape.SizeHorCursor
+    start = QPoint(w.width() - 2, 50)
+    send(QMouseEvent.Type.MouseButtonPress, start, L)
+    g0 = w.mapToGlobal(start)
+    qapp.sendEvent(w, QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(start + QPoint(200, 0)),
+                                  QPointF(g0 + QPoint(200, 0)), Qt.MouseButton.NoButton, L,
+                                  Qt.KeyboardModifier.NoModifier))
+    send(QMouseEvent.Type.MouseButtonRelease, start, Qt.MouseButton.NoButton)
+    assert (w.width(), w.height()) == (402, 202)
+    assert w.geometry().topLeft() == geo.topLeft()       # левый верхний угол на месте
+    w.close()
