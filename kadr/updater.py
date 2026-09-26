@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,22 +51,43 @@ class Release:
     notes: str
 
 
+RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
+
+
+def is_trusted_url(url: str | None) -> bool:
+    """Только https и только адреса GitHub (API, страницы, файлы релизов и их CDN).
+    Адреса приходят в ответе сервера — без проверки туда мог бы попасть file: или чужой сайт."""
+    if not url:
+        return False
+    p = urllib.parse.urlparse(url)
+    host = (p.hostname or "").lower()
+    return p.scheme == "https" and (host in ("github.com", "api.github.com")
+                                    or host.endswith(".githubusercontent.com"))
+
+
 def parse_release(data: dict) -> Release:
     asset = next((a for a in data.get("assets", []) if a.get("name") == INSTALLER_ASSET), None)
     digest = (asset or {}).get("digest") or ""
+    page = data.get("html_url")
+    installer = (asset or {}).get("browser_download_url")
+    sha = digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else ""
     return Release(
         version=str(data.get("tag_name", "")).lstrip("v"),
-        page_url=data.get("html_url", f"https://github.com/{REPO}/releases/latest"),
-        installer_url=(asset or {}).get("browser_download_url"),
-        installer_sha256=digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else None,
+        page_url=page if is_trusted_url(page) and page.startswith("https://github.com/") else RELEASES_PAGE,
+        installer_url=installer if is_trusted_url(installer) else None,
+        installer_sha256=sha if len(sha) == 64 and all(c in "0123456789abcdef" for c in sha) else None,
         notes=data.get("body", "") or "",
     )
 
 
 def _fetch(url: str, timeout: float = 15) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"Kadr/{__version__}",
+    if not is_trusted_url(url):
+        raise ValueError("недоверенный адрес")
+    req = urllib.request.Request(url, headers={"User-Agent": f"Kadr/{__version__}",  # noqa: S310
                                                "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — адрес проверен выше
+        if not is_trusted_url(r.geturl()):                     # и после перенаправлений
+            raise ValueError("перенаправление на недоверенный адрес")
         return r.read()
 
 
@@ -113,7 +135,9 @@ class Updater(QObject):
         rel = self.latest
         if rel is None or self._busy:
             return
-        if not can_self_update() or not rel.installer_url:
+        # Тихая установка — только когда есть и адрес, и контрольная сумма: без неё файл
+        # не проверить, поэтому открываем страницу релиза, и пользователь ставит сам
+        if not can_self_update() or not rel.installer_url or not rel.installer_sha256:
             from PySide6.QtCore import QUrl
             from PySide6.QtGui import QDesktopServices
 
@@ -125,7 +149,7 @@ class Updater(QObject):
         def work() -> None:
             try:
                 data = _fetch(rel.installer_url, timeout=300)
-                if rel.installer_sha256 and hashlib.sha256(data).hexdigest() != rel.installer_sha256:
+                if hashlib.sha256(data).hexdigest() != rel.installer_sha256:
                     raise RuntimeError("контрольная сумма не совпала — файл повреждён или подменён")
                 path = Path(tempfile.gettempdir()) / f"Kadr-Setup-{rel.version}.exe"
                 path.write_bytes(data)

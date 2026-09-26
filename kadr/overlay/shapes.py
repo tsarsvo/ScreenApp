@@ -65,7 +65,7 @@ class PenStroke(Shape):
             return
         # Сглаживание: квадратичные кривые через середины соседних точек
         path = QPainterPath(self.points[0])
-        for a, b in zip(self.points[1:-1], self.points[2:]):
+        for a, b in zip(self.points[1:-1], self.points[2:], strict=True):
             path.quadTo(a, (a + b) / 2)
         path.lineTo(self.points[-1])
         p.drawPath(path)
@@ -211,7 +211,7 @@ class MarkerStroke(PenStroke):
         path = QPainterPath(self.points[0])
         if len(self.points) == 1:
             path.lineTo(self.points[0] + QPointF(0.01, 0))
-        for a, b in zip(self.points[1:-1], self.points[2:]):
+        for a, b in zip(self.points[1:-1], self.points[2:], strict=True):
             path.quadTo(a, (a + b) / 2)
         if len(self.points) > 1:
             path.lineTo(self.points[-1])

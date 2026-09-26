@@ -52,7 +52,7 @@ def send_command(exe: Path, flag: str, env: dict, work: Path) -> None:
         for dump in sorted(work.glob("hang.*")):
             print(f"--- {dump.name}\n{dump.read_text(encoding='utf-8', errors='replace')}")
         proc.kill()
-        raise SystemExit(f"  ✗ `Kadr.exe {flag}` не завершился за 30 с (стеки потоков выше)")
+        raise SystemExit(f"  ✗ `Kadr.exe {flag}` не завершился за 30 с (стеки потоков выше)") from None
     print(f"    Kadr.exe {flag}: код {code}, {time.monotonic() - t:.1f} с")
     if code != 0:
         raise SystemExit(f"  ✗ `Kadr.exe {flag}` завершился с кодом {code}")

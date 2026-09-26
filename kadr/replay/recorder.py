@@ -330,7 +330,7 @@ class ReplayRecorder(QObject):
         self.dir.mkdir(parents=True, exist_ok=True)
         audio_inputs, pump = self._audio_inputs(exe, opts)
         cmd = build_command(exe, attempt, opts, self.dir, audio_inputs)
-        log = open(self.dir / "ffmpeg.log", "wb")
+        log = open(self.dir / "ffmpeg.log", "wb")  # noqa: SIM115 — открыт, пока пишет FFmpeg
         try:
             # popen_tied: FFmpeg умрёт вместе с Kadr, даже если Kadr завершат принудительно
             proc = popen_tied(cmd, stdin=subprocess.PIPE if pump else subprocess.DEVNULL,

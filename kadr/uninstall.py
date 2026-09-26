@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -38,10 +39,8 @@ def installer_uninstaller() -> Path | None:
 
 
 def remove_user_data() -> None:
-    try:
+    with contextlib.suppress(OSError):
         autostart.set_enabled(False)
-    except OSError:
-        pass
     shutil.rmtree(config_dir(), ignore_errors=True)
     shutil.rmtree(Path(tempfile.gettempdir()) / f"{APP_NAME.lower()}-replay", ignore_errors=True)
 

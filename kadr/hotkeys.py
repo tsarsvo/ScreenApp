@@ -54,7 +54,7 @@ class Hotkey:
 
     # --- сериализация -----------------------------------------------------
     @classmethod
-    def parse(cls, text: str) -> "Hotkey | None":
+    def parse(cls, text: str) -> Hotkey | None:
         parts = [p.strip().lower() for p in (text or "").split("+") if p.strip()]
         if not parts:
             return None
@@ -96,7 +96,7 @@ def label_for(text: str) -> str:
     return hk.label() if hk else "—"
 
 
-def hotkey_from_event(event: QKeyEvent) -> "Hotkey | None | str":
+def hotkey_from_event(event: QKeyEvent) -> Hotkey | None | str:
     """Преобразует нажатие в Qt в Hotkey. Возвращает строку-ошибку, если сочетание не подходит."""
     qk = event.key()
     if qk in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta,

@@ -647,7 +647,7 @@ def _max_channel_diff(a, b) -> int:
     da, db = bytes(a.constBits()), bytes(b.constBits())
     if da == db:
         return 0
-    return max(abs(x - y) for x, y in zip(da, db) if x != y)
+    return max(abs(x - y) for x, y in zip(da, db, strict=True) if x != y)
 
 
 def test_no_guides_or_hint_while_selection_is_being_dragged(qapp):

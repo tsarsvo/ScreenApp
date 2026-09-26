@@ -17,7 +17,10 @@ from kadr import updater
 
 @pytest.fixture(scope="module")
 def app():
-    return QCoreApplication.instance() or QCoreApplication([])
+    # QApplication, а не QCoreApplication: тест кнопки в настройках создаёт окно
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
 
 
 def _release_json(tag="v9.9.9", payload=b"installer"):
@@ -25,8 +28,8 @@ def _release_json(tag="v9.9.9", payload=b"installer"):
     return {
         "tag_name": tag, "html_url": f"https://github.com/tsarsvo/ScreenApp/releases/tag/{tag}", "body": "notes",
         "assets": [
-            {"name": "Kadr-portable.zip", "browser_download_url": "https://x/portable.zip", "digest": "sha256:00"},
-            {"name": "Kadr-Setup.exe", "browser_download_url": "https://x/Kadr-Setup.exe",
+            {"name": "Kadr-portable.zip", "browser_download_url": f"https://github.com/tsarsvo/ScreenApp/releases/download/{tag}/Kadr-portable.zip", "digest": "sha256:00"},
+            {"name": "Kadr-Setup.exe", "browser_download_url": f"https://github.com/tsarsvo/ScreenApp/releases/download/{tag}/Kadr-Setup.exe",
              "digest": "sha256:" + hashlib.sha256(payload).hexdigest()},
         ],
     }
@@ -116,3 +119,44 @@ def test_settings_check_updates_button(monkeypatch, tmp_path):
     w.update_btn.click()
     assert calls[-1] == ("install",)
     w.close()
+
+
+@pytest.mark.parametrize("url, ok", [
+    ("https://api.github.com/repos/tsarsvo/ScreenApp/releases/latest", True),
+    ("https://github.com/tsarsvo/ScreenApp/releases/download/v1/Kadr-Setup.exe", True),
+    ("https://release-assets.githubusercontent.com/x/Kadr-Setup.exe", True),
+    ("http://github.com/tsarsvo/ScreenApp/releases/download/v1/Kadr-Setup.exe", False),   # без https
+    ("file:///C:/Windows/System32/calc.exe", False),
+    ("https://github.com.evil.example/Kadr-Setup.exe", False),
+    ("https://evilgithubusercontent.com/x", False),
+    ("", False), (None, False),
+])
+def test_only_https_github_urls_are_trusted(url, ok):
+    assert updater.is_trusted_url(url) is ok
+
+
+def test_release_with_untrusted_urls_or_bad_digest_is_not_installed_silently(app, monkeypatch):
+    data = _release_json()
+    data["html_url"] = "file:///C:/evil"
+    data["assets"][1]["browser_download_url"] = "https://evil.example/Kadr-Setup.exe"
+    rel = updater.parse_release(data)
+    assert rel.page_url == updater.RELEASES_PAGE and rel.installer_url is None
+
+    data = _release_json()
+    data["assets"][1]["digest"] = ""                      # нет контрольной суммы
+    rel = updater.parse_release(data)
+    assert rel.installer_sha256 is None
+    opened, fetched = [], []
+    monkeypatch.setattr(updater, "can_self_update", lambda: True)
+    monkeypatch.setattr(updater, "_fetch", lambda *a, **k: fetched.append(a))
+    from PySide6.QtGui import QDesktopServices
+    monkeypatch.setattr(QDesktopServices, "openUrl", staticmethod(lambda u: opened.append(u.toString())))
+    u = updater.Updater()
+    u.latest = rel
+    u.install()
+    assert not fetched and opened == [rel.page_url]       # без проверки — не качаем и не запускаем
+
+
+def test_fetch_refuses_untrusted_url():
+    with pytest.raises(ValueError):
+        updater._fetch("file:///etc/passwd")

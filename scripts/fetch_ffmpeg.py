@@ -29,8 +29,10 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 def fetch(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "kadr-build"})
-    with urllib.request.urlopen(req, timeout=300) as r:
+    if not url.startswith("https://"):
+        raise SystemExit(f"Загрузка только по https: {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "kadr-build"})  # noqa: S310 — https проверен
+    with urllib.request.urlopen(req, timeout=300) as r:  # noqa: S310
         return r.read()
 
 

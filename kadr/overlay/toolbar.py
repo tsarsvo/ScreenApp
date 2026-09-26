@@ -57,8 +57,10 @@ class Panel(QWidget):
         self._t = t
         self.update()
 
-    def appear_at(self, pos: QPoint, from_offset: QPoint = QPoint(0, 6)) -> None:
+    def appear_at(self, pos: QPoint, from_offset: QPoint | None = None) -> None:
         """Плавно показать панель в точке pos (с небольшим «выездом»)."""
+        if from_offset is None:
+            from_offset = QPoint(0, 6)
         was_visible = self.isVisible()
         self.show()
         self.raise_()
