@@ -11,14 +11,14 @@
 
 <!-- Номер версии прописывает сборка релиза (scripts/bump_readme.py) — вручную не трогать -->
 <a href="https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe">
-  <img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%B4%D0%BB%D1%8F%20Windows-v1.2.4-3F6BFF?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать для Windows (kadr-version)" height="42">
+  <img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%B4%D0%BB%D1%8F%20Windows-v1.2.5-3F6BFF?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать для Windows (kadr-version)" height="42">
 </a>
 
 <sub><a href="CHANGELOG.md"><b>Что нового</b></a> · <a href="https://github.com/tsarsvo/ScreenApp/releases">все версии и портативная сборка</a> · Windows 10/11 · бесплатно</sub>
 
 <br><br>
 
-<a href="https://github.com/tsarsvo/ScreenApp/releases/latest"><img src="https://img.shields.io/badge/%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D1%8F%D1%8F%20%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v1.2.4-3F6BFF" alt="Последняя версия (kadr-version)"></a>
+<a href="https://github.com/tsarsvo/ScreenApp/releases/latest"><img src="https://img.shields.io/badge/%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D1%8F%D1%8F%20%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v1.2.5-3F6BFF" alt="Последняя версия (kadr-version)"></a>
 <a href="https://github.com/tsarsvo/ScreenApp/releases/latest"><img src="https://img.shields.io/github/release-date/tsarsvo/ScreenApp?label=%D0%B2%D1%8B%D1%88%D0%BB%D0%B0&color=3F6BFF&cacheSeconds=300" alt="Дата выхода"></a>
 <a href="https://github.com/tsarsvo/ScreenApp/releases"><img src="https://img.shields.io/github/downloads/tsarsvo/ScreenApp/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D0%B9&color=3F6BFF&cacheSeconds=300" alt="Скачиваний"></a>
 <a href="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml"><img src="https://github.com/tsarsvo/ScreenApp/actions/workflows/windows.yml/badge.svg" alt="Windows build"></a>
