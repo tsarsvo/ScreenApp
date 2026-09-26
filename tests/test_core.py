@@ -427,27 +427,30 @@ def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
 
 
 # ------------------------------------------------ рисование за выделением, шаги, закреплённый снимок
-def test_drawing_outside_selection_grows_it_and_undo_restores(qapp):
+def test_drawing_outside_selection_keeps_it_and_clips(qapp):
+    """Рисовать можно начать и за рамкой, но рамка не меняется: в файл попадает только
+    то, что внутри. Текст и номер шага за рамкой не ставятся (их не было бы видно)."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (300, 250))
     sel0 = QRect(o._sel)
-    o.set_tool(Tool.RECT)
-    _drag(o, (250, 200), (400, 350))                     # фигура выходит за правый нижний край
-    assert o._sel.contains(QRect(250, 200, 150, 150)) and o._sel.topLeft() == sel0.topLeft()
-    grown = QRect(o._sel)
-    img = o.render_selection()
-    assert img.width() == grown.width() * 2              # в файл попадает вся фигура
+    o._set_color(QColor("#0000FF"))
+    o.set_tool(Tool.LINE)
+    _drag(o, (400, 175), (200, 175))                     # линия «с края» внутрь рамки
     o.set_tool(Tool.PEN)
     _drag(o, (20, 30), (60, 40))                         # штрих целиком снаружи
-    assert o._sel.contains(QPoint(20, 30))
+    assert o._sel == sel0 and len(o._history.shapes) == 2
+    img = o.render_selection()
+    assert (img.width(), img.height()) == (sel0.width() * 2, sel0.height() * 2)
+    assert img.pixelColor((250 - 100) * 2, (175 - 100) * 2).blue() > 200   # часть внутри — в файле
+    for tool in (Tool.TEXT, Tool.STEP):
+        o.set_tool(tool)
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 400))
+        o._commit_text()
+    assert len(o._history.shapes) == 2 and o._editing is None
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == grown
-    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == sel0 and not o._history.shapes      # отмена возвращает прежнее выделение
-    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
-    assert o._sel == grown
+    assert o._sel == sel0 and len(o._history.shapes) == 1
     o.close()
 
 
@@ -645,3 +648,78 @@ def _max_channel_diff(a, b) -> int:
     if da == db:
         return 0
     return max(abs(x - y) for x, y in zip(da, db) if x != y)
+
+
+def test_no_guides_or_hint_while_selection_is_being_dragged(qapp):
+    """Нажали ЛКМ и тянем: направляющие и подсказка «Выделите область» должны исчезнуть
+    сразу при нажатии. Раньше выделение 0×0 в момент нажатия считалось «пустым», и они
+    рисовались заново, а при протяжке стирались только там, где прошло выделение."""
+    o = _overlay(qapp)
+    o._dim = 1.0
+
+    def grab():                     # то, что сейчас нарисовано на оверлее
+        img = QImage(o.size(), QImage.Format.Format_RGB32)
+        o.render(img)
+        return img
+
+    bg = lambda img, x, y: img.pixelColor(x, y).name()               # noqa: E731
+    QTest.mouseMove(o, QPoint(200, 200))
+    img = grab()
+    assert bg(img, 600, 200) != bg(img, 600, 260)                     # до нажатия направляющие есть
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 200))
+    img = grab()
+    assert bg(img, 600, 200) == bg(img, 600, 260)                     # горизонтальная направляющая пропала
+    assert bg(img, 200, 500) == bg(img, 260, 500)                     # и вертикальная
+    assert bg(img, 400, 39) == bg(img, 400, 300)                      # и подсказка сверху
+    QTest.mouseMove(o, QPoint(260, 240))
+    img = grab()
+    assert bg(img, 600, 200) == bg(img, 600, 260) and bg(img, 400, 39) == bg(img, 400, 300)
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(260, 240))
+    o.close()
+
+
+def test_settings_restart_as_admin(qapp, tmp_path, monkeypatch):
+    """Кнопка «Перезапустить с правами администратора»: при согласии Windows текущая копия
+    закрывается, при отказе остаётся и показывает понятное сообщение."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from kadr import admin
+    from kadr.config import SettingsStore
+    from kadr.theme import ThemeManager
+    from kadr.ui.settings_window import SettingsWindow
+
+    monkeypatch.setattr(admin, "supported", lambda: True)
+    monkeypatch.setattr(admin, "is_elevated", lambda: False)
+    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
+    restarted = []
+    w.restarting.connect(lambda: restarted.append(True))
+
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: False)     # нажали «Нет» в запросе Windows
+    w.admin_btn.click()
+    assert not restarted and "не дала разрешение" in w.admin_status.text()
+
+    monkeypatch.setattr(admin, "relaunch_as_admin", lambda: True)
+    w.admin_btn.click()
+    assert restarted
+    w.close()
+
+    monkeypatch.setattr(admin, "is_elevated", lambda: True)             # уже с правами администратора
+    w = SettingsWindow(SettingsStore(), ThemeManager("light"))
+    assert not w.admin_btn.isEnabled() and "уже работает" in w.admin_status.text()
+    w.close()
+
+
+def test_admin_restart_command_line(monkeypatch):
+    """Новая копия получает флаг --restarted (ждёт, пока старая закроется)."""
+    import types
+
+    from kadr import admin
+
+    calls = []
+    shell32 = types.SimpleNamespace(ShellExecuteW=lambda *a: calls.append(a) or 42)
+    monkeypatch.setattr(admin, "supported", lambda: True)
+    monkeypatch.setattr(admin, "launch_command", lambda: [r"C:\Program Files\Kadr\Kadr.exe"])
+    monkeypatch.setitem(sys.modules, "ctypes", types.SimpleNamespace(windll=types.SimpleNamespace(shell32=shell32)))
+    assert admin.relaunch_as_admin()
+    _, verb, exe, params, _, show = calls[0]
+    assert (verb, exe, params, show) == ("runas", r"C:\Program Files\Kadr\Kadr.exe", '"--restarted"', 1)

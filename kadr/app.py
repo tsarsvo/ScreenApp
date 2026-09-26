@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import os
 import sys
 import threading
 import time
@@ -13,7 +14,7 @@ from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QI
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import APP_ID, APP_NAME, __version__, autostart, icons
+from . import APP_ID, APP_NAME, __version__, admin, autostart, icons
 from .capture import grab_full_desktop, grab_screens
 from .config import SettingsStore
 from .hotkeys import HotkeyManager, label_for
@@ -264,6 +265,7 @@ class KadrApp(QObject):
             self.settings_window = SettingsWindow(self.store, self.theme, self.replay, self.updater)
             self.settings_window.hotkey_recording.connect(self._on_hotkey_recording)
             self.settings_window.uninstall_done.connect(self.qapp.quit)
+            self.settings_window.restarting.connect(self.qapp.quit)   # новая копия уже запущена
             self.settings_window.show_hotkey_error(
                 "; ".join(e for e in self._hotkey_errors.values() if e))
         self.settings_window.present()
@@ -426,10 +428,16 @@ def _send_to_running(cmd: str, timeout_ms: int = 300) -> bool:
         sock = QLocalSocket()
         sock.connectToServer(_server_name())
         if sock.waitForConnected(500):
-            sock.write(cmd.encode())
-            sock.waitForBytesWritten(1000)
+            sock.write(cmd.encode() + b"\n")
+            sock.waitForBytesWritten(2000)
             sock.disconnectFromServer()
+            if sock.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+                sock.waitForDisconnected(1000)
+            # Закрываем принудительно: на Windows незавершённая запись в канал могла
+            # держать процесс при выходе бесконечно, пока первая копия занята
+            sock.abort()
             return True
+        sock.abort()
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.2)
@@ -458,10 +466,17 @@ def main() -> int:
     qapp.setWindowIcon(icons.logo_icon())
 
     lock = _instance_lock()
-    if not lock.tryLock(0):
+    # Перезапуск с правами администратора: прежняя копия ещё закрывается — ждём её,
+    # а не передаём команду ей же
+    wait_ms = 10_000 if admin.RESTARTED_FLAG in args else 0
+    if not lock.tryLock(wait_ms):
         # Уже запущено: только передаём команду. Вторую копию не поднимаем никогда —
         # иначе `Kadr.exe --full` при занятой первой копии остался бы висеть в трее.
-        return 0 if _send_to_running(cmd or "settings", timeout_ms=10_000) else 1
+        # Страховка: эта копия нужна только чтобы передать команду — дольше 15 с она
+        # не живёт ни при каких обстоятельствах
+        threading.Timer(15, lambda: os._exit(1)).start()
+        ok = _send_to_running(cmd or "settings", timeout_ms=10_000)
+        os._exit(0 if ok else 1)     # без очистки Qt при выходе: ей нечего сохранять
 
     if sys.platform == "darwin":
         _hide_dock_icon()
@@ -484,13 +499,37 @@ def main() -> int:
 
     QLocalServer.removeServer(_server_name())  # на случай «зависшего» сокета после сбоя
     server = QLocalServer()
+    # Kadr с правами администратора должен принимать команды и от обычного запуска
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
     server.listen(_server_name())
 
     def on_connection():
-        conn = server.nextPendingConnection()
-        conn.waitForReadyRead(300)
-        app.handle_command(bytes(conn.readAll()).decode(errors="ignore"))
-        conn.deleteLater()
+        while server.hasPendingConnections():
+            conn = server.nextPendingConnection()
+            buf = bytearray()
+
+            # Команда читается, когда данные действительно пришли (раньше ждали 300 мс,
+            # и опоздавшая команда терялась). Конец команды — перевод строки или отключение.
+            def read(conn=conn, buf=buf):
+                buf.extend(bytes(conn.readAll()))
+                if b"\n" in buf or conn.state() != QLocalSocket.LocalSocketState.ConnectedState:
+                    finish(conn, buf)
+
+            def finish(conn, buf):
+                if conn.property("done"):
+                    return
+                conn.setProperty("done", True)
+                buf.extend(bytes(conn.readAll()))
+                cmd = bytes(buf).split(b"\n")[0].decode(errors="ignore").strip()
+                if cmd:
+                    app.handle_command(cmd)
+                conn.deleteLater()
+
+            conn.readyRead.connect(read)
+            conn.disconnected.connect(lambda conn=conn, buf=buf: finish(conn, buf))
+            QTimer.singleShot(5000, conn, lambda conn=conn, buf=buf: finish(conn, buf))   # не висим вечно
+            if conn.bytesAvailable():
+                read()
 
     server.newConnection.connect(on_connection)
 
