@@ -1,6 +1,6 @@
 # Сборка Kadr для Windows: тесты → FFmpeg → PyInstaller → установщик Inno Setup.
 # Готовые файлы — во вкладке Actions (артефакт «Kadr-Windows»).
-# Релиз: Actions → Windows build → Run workflow → указать версию (например 1.1.0)
+# Релиз: допишите раздел версии в CHANGELOG.md, затем Actions → Windows build → Run workflow → версия
 # или запушить тег вида v1.1.0 — установщик появится в разделе Releases.
 name: Windows build
 
@@ -35,6 +35,11 @@ jobs:
         shell: pwsh
         run: |
           if ($env:KADR_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Версия должна быть вида 1.2.3, получено: $env:KADR_VERSION" }
+
+      # Сразу, до долгой сборки: без раздела версии в CHANGELOG.md релиз не выпускается
+      - name: Описание релиза из CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v') || env.KADR_VERSION != ''
+        run: python scripts/release_notes.py ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || env.KADR_VERSION }} release_notes.md
 
       - uses: actions/setup-python@v5
         with:
@@ -87,11 +92,8 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.KADR_VERSION) }}
           target_commitish: ${{ github.sha }}
           name: Kadr ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.KADR_VERSION) }}
-          generate_release_notes: true
-          body: |
-            **Скачайте `Kadr-Setup.exe`** и запустите — программа установится с ярлыками на рабочем столе и в «Пуске».
-            `Kadr-portable.zip` — версия без установки: распакуйте и запустите `Kadr.exe`.
-            Если Windows SmartScreen предупредит о неизвестном издателе: «Подробнее» → «Выполнить в любом случае».
+          generate_release_notes: true      # внизу — список влитых PR
+          body_path: release_notes.md
           files: |
             dist/Kadr-Setup.exe
             dist/Kadr-portable.zip

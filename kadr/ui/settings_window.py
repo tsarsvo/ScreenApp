@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFileDialog, QMessageBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QColorDialog, QComboBox, QFileDialog, QMessageBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, autostart, icons, uninstall
@@ -110,7 +110,7 @@ class SettingsWindow(QWidget):
         fmt = Segmented([("png", "PNG"), ("jpg", "JPG"), ("webp", "WEBP")], s.image_format)
         fmt.changed.connect(self._set_format)
         self._row(card, "Формат", fmt)
-        self._divider(card)
+        self.quality_divider = self._divider(card)     # прячется вместе со строкой «Качество»
 
         q_row = QHBoxLayout()
         self.quality = QSlider(Qt.Orientation.Horizontal)
@@ -166,8 +166,10 @@ class SettingsWindow(QWidget):
         self._row(card, "История скриншотов", self._toggle("history_enabled"),
                   "Последние 12 снимков в меню значка → «Недавние»")
         self._divider(card)
-        self.autostart = QCheckBox()
+        # Тумблер, как у остальных пунктов; состояние берётся из самой ОС, а не из настроек
+        self.autostart = ToggleSwitch()
         self.autostart.setChecked(autostart.is_enabled())
+        self._toggles.append(self.autostart)
         self.autostart.toggled.connect(self._set_autostart)
         self.autostart_error = QLabel("")
         self.autostart_error.setObjectName("Error")
@@ -251,10 +253,11 @@ class SettingsWindow(QWidget):
         card.addWidget(w)
         return w
 
-    def _divider(self, card: QVBoxLayout) -> None:
+    def _divider(self, card: QVBoxLayout) -> QFrame:
         line = QFrame()
         line.setObjectName("Divider")
         card.addWidget(line)
+        return line
 
     def _toggle(self, field: str) -> ToggleSwitch:
         t = ToggleSwitch()
@@ -421,7 +424,9 @@ class SettingsWindow(QWidget):
         self._update_quality_enabled()
 
     def _update_quality_enabled(self) -> None:
-        self.quality_row.setVisible(self.store.data.image_format in ("jpg", "webp"))
+        lossy = self.store.data.image_format in ("jpg", "webp")
+        self.quality_row.setVisible(lossy)
+        self.quality_divider.setVisible(lossy)
 
     def _set_autostart(self, enabled: bool) -> None:
         try:
