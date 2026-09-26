@@ -547,3 +547,21 @@ def test_pin_resize_by_edge_keeps_aspect(qapp):
     assert (w.width(), w.height()) == (402, 202)
     assert w.geometry().topLeft() == geo.topLeft()       # левый верхний угол на месте
     w.close()
+
+
+def test_line_tool_draws_straight_line_snapped_with_shift(qapp):
+    from kadr.overlay.shapes import LineShape, Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    QTest.keyClick(o, Qt.Key.Key_L)
+    assert o._tool == Tool.LINE and o.toolbar._tool_buttons[Tool.LINE].isChecked()
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(150, 300))
+    QTest.mouseMove(o, QPoint(300, 290))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(300, 290))
+    line = o._history.shapes[-1]
+    assert isinstance(line, LineShape)
+    assert abs(line.end.y() - 300) < 0.01                 # Shift → ровно горизонтально
+    img = o.render_selection()
+    assert img.pixelColor((200 - 100) * 2, (300 - 100) * 2).red() > 200   # линия есть в файле
+    o.close()

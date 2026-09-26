@@ -22,7 +22,7 @@ from ..capture import ScreenShot
 from ..hotkeys import _MAC_VK
 from ..theme import Tokens
 from .history import History
-from .shapes import (ArrowShape, EllipseShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
+from .shapes import (ArrowShape, EllipseShape, LineShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
                      TextShape, Tool, TwoPointShape, font_px_for_width, marker_width)
 from .toolbar import SHADOW, StylePopup, Toolbar
 
@@ -42,7 +42,7 @@ _HANDLE_CURSORS = {
     "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
-_TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW,
+_TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW, Qt.Key.Key_L: Tool.LINE,
               Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT,
               Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP}
 
@@ -690,7 +690,7 @@ class Overlay(QWidget):
             number = sum(isinstance(s, StepShape) for s in self._history.shapes) + 1
             self._current = StepShape(c, w, pos=pos, number=number)
         else:
-            cls = {Tool.ARROW: ArrowShape, Tool.RECT: RectShape, Tool.ELLIPSE: EllipseShape}[self._tool]
+            cls = {Tool.ARROW: ArrowShape, Tool.LINE: LineShape, Tool.RECT: RectShape, Tool.ELLIPSE: EllipseShape}[self._tool]
             self._current = cls(c, w, start=pos, end=pos)
 
     def _continue_drawing(self, pos: QPointF, shift: bool) -> None:
@@ -703,8 +703,8 @@ class Overlay(QWidget):
         elif isinstance(cur, StepShape):
             cur.pos = pos                                # номер можно перетащить, пока кнопка зажата
         elif isinstance(cur, TwoPointShape):
-            if shift and isinstance(cur, ArrowShape):
-                # Shift: стрелка с шагом 45°
+            if shift and isinstance(cur, (ArrowShape, LineShape)):
+                # Shift: стрелка и линия с шагом 45°
                 line = QLineF(cur.start, pos)
                 line.setAngle(round(line.angle() / 45) * 45)
                 pos = line.p2()
