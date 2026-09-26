@@ -37,6 +37,21 @@ class Panel(QWidget):
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(180)
         self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Прозрачное поле под тень заходит на ручки выделения. Без слежения за мышью
+        # движение над ним до оверлея не доходило: курсор не менялся на «изменить размер»,
+        # хотя нажатие (оно передаётся родителю) всё равно тянуло ручку.
+        self.setMouseTracking(True)
+
+    def _body(self) -> QRectF:
+        return QRectF(self.rect()).adjusted(SHADOW, SHADOW, -SHADOW, -SHADOW)
+
+    def mouseMoveEvent(self, e) -> None:
+        if self._body().contains(e.position()):
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            e.accept()
+        else:
+            self.unsetCursor()     # курсор оверлея (ручка, прицел…)
+            e.ignore()             # → событие получит оверлей
 
     def apply_theme(self, t: Tokens) -> None:
         self._t = t

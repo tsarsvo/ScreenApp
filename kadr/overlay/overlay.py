@@ -31,6 +31,7 @@ HANDLE_R = 4.0           # радиус «ручки» изменения раз
 HANDLE_HIT = 9           # зона попадания по ручке
 GAP = 8                  # отступ панели от выделения
 MIN_SELECTION = 4        # меньше — считаем кликом, а не выделением
+GUIDE_PAD = 3            # запас при перерисовке направляющих (дробный масштаб Windows)
 
 # Ручки: (id, доля по x, доля по y)
 _HANDLES = [("tl", 0, 0), ("t", .5, 0), ("tr", 1, 0), ("r", 1, .5),
@@ -108,6 +109,10 @@ class Overlay(QWidget):
         self._current: Shape | None = None
         self._editing: TextShape | None = None
         self._mouse = QPoint(-100, -100)
+        # Перетаскивание нумерованного шага
+        self._drag_step: StepShape | None = None
+        self._drag_from = QPointF()
+        self._drag_offset = QPointF()
 
         # Плавное появление затемнения
         self._dim = 0.0
@@ -263,18 +268,44 @@ class Overlay(QWidget):
         if self._editing:  # сначала отменяем незавершённый текст
             self._editing = None
             self._caret_timer.stop()
-        elif not self._history.undo():
-            return
+        else:
+            action = self._history.undo()
+            if not action:
+                return
+            if action.sel_before is not None:
+                self._set_selection(action.sel_before)
         self._layer = None
         self._sync_toolbar()
         self.update()
 
     def redo(self) -> None:
         self._commit_text()
-        if self._history.redo():
-            self._layer_add(self._history.shapes[-1])
+        action = self._history.redo()
+        if action:
+            if action.sel_after is not None:
+                self._set_selection(action.sel_after)
+            self._layer = None
             self._sync_toolbar()
             self.update()
+
+    def _set_selection(self, r: QRect) -> None:
+        self._sel = QRect(r)
+        if self.toolbar.isVisible():
+            self._place_toolbar()
+
+    def _push_shape(self, shape: Shape) -> None:
+        """Готовая фигура → в историю. Если она вышла за край выделения, выделение
+        расширяется до неё: в файл попадает ровно то, что нарисовано."""
+        before = QRect(self._sel)
+        grown = before.united(shape.bounds().toAlignedRect()).intersected(self.rect())
+        if grown != before:
+            self._history.push(shape, before, grown)
+            self._set_selection(grown)
+            self._layer = None
+            self.update()
+        else:
+            self._history.push(shape)
+            self._layer_add(shape)
 
     # ------------------------------------------------------------- actions
     def _copy(self) -> None:
@@ -358,6 +389,16 @@ class Overlay(QWidget):
                 return hid
         return None
 
+    def _step_at(self, pos: QPoint) -> StepShape | None:
+        """Нумерованный шаг, за кружок которого можно взяться (верхний — первым)."""
+        if not self._sel or self._mode == "drawing":
+            return None
+        pt = QPointF(pos)
+        for s in reversed(self._history.shapes):
+            if isinstance(s, StepShape) and QLineF(s.pos, pt).length() <= s.radius():
+                return s
+        return None
+
     def _place_toolbar(self) -> None:
         """Панель рядом с выделением, не перекрывая его: снизу → сверху → внутри (крайний случай)."""
         if not self._sel:
@@ -399,10 +440,19 @@ class Overlay(QWidget):
         self._commit_text()
         self._press = pos
         handle = self._hit_handle(pos)
+        step = None if handle else self._step_at(pos)
         if handle:
             self._mode, self._handle, self._sel_origin = "resizing", handle, QRect(self._sel)
             self.toolbar.hide()
-        elif self._sel and self._sel.contains(pos) and self._tool != Tool.SELECT:
+        elif step:
+            # взяли нумерованный шаг — тащим его; слой собирается без него
+            self._mode, self._drag_step = "dragging", step
+            self._drag_from = QPointF(step.pos)
+            self._drag_offset = step.pos - QPointF(e.position())
+            self._layer = None
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif self._sel and self._tool != Tool.SELECT:
+            # рисовать можно и за пределами выделения — оно расширится до фигуры
             self._start_drawing(QPointF(e.position()))
         elif self._sel and self._sel.contains(pos):
             self._mode, self._sel_origin = "moving", QRect(self._sel)
@@ -441,6 +491,15 @@ class Overlay(QWidget):
             self._continue_drawing(QPointF(e.position()), shift)
             self._update_shape_area(before)
             return
+        elif self._mode == "dragging" and self._drag_step:
+            before = self._drag_step.bounds()
+            c = QPointF(e.position()) + self._drag_offset
+            s = self._sel
+            # центр шага остаётся внутри выделения, иначе номер пропадёт из файла
+            self._drag_step.pos = QPointF(min(max(c.x(), s.left()), s.right()),
+                                          min(max(c.y(), s.top()), s.bottom()))
+            self._update_shape_area(before)
+            return
         else:
             self._update_cursor(pos)
             self._update_hover(old_mouse)
@@ -456,9 +515,8 @@ class Overlay(QWidget):
             if self._sel.width() < MIN_SELECTION or self._sel.height() < MIN_SELECTION:
                 # Клик без протяжки (или случайное «дрожание» мыши) ничего не выделяет —
                 # раньше он выделял весь экран, и при быстрых кликах панель «уезжала» в угол
-                old = QRect(self._sel)
                 self._sel = None
-                self.update(self._selection_area(old))
+                self.update()        # направляющие снова видны целиком
                 return
             self._place_toolbar()
         elif mode in ("moving", "resizing"):
@@ -468,11 +526,16 @@ class Overlay(QWidget):
         elif mode == "drawing" and self._current:
             shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             self._continue_drawing(QPointF(e.position()), shift)
-            if not self._current.is_empty():
-                self._history.push(self._current)
-                self._layer_add(self._current)
+            cur, self._current = self._current, None
+            if not cur.is_empty():
+                self._push_shape(cur)
                 self._sync_toolbar()
-            self._current = None
+        elif mode == "dragging" and self._drag_step:
+            step, self._drag_step = self._drag_step, None
+            if step.pos != self._drag_from:
+                self._history.push_move(step, self._drag_from, step.pos)
+                self._sync_toolbar()
+            self._layer = None
         self._update_cursor(e.position().toPoint())
         self.update()
 
@@ -500,12 +563,23 @@ class Overlay(QWidget):
         # Несколько мониторов: клавиатура следует за мышью
         if not self.isActiveWindow():
             self.activate()
+        old, self._mouse = self._mouse, e.position().toPoint()
+        self._update_hover(old)
         super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        # Мышь ушла на другой монитор — направляющие здесь не должны «зависать»
+        if self._mode == "idle":
+            old, self._mouse = self._mouse, QPoint(-100, -100)
+            self._update_hover(old)
+        super().leaveEvent(e)
 
     def _update_cursor(self, pos: QPoint) -> None:
         handle = self._hit_handle(pos)
         if handle:
             self.setCursor(_HANDLE_CURSORS[handle])
+        elif self._step_at(pos):
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         elif self._sel and self._sel.contains(pos):
             if self._tool == Tool.SELECT:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -543,22 +617,30 @@ class Overlay(QWidget):
         # ручки, рамка и «таблетка» с размером над левым верхним углом
         return r.adjusted(-HANDLE_HIT - 2, -34, 160, HANDLE_HIT + 2)
 
-    def _update_shape_area(self, _before: QRectF) -> None:
+    def _update_shape_area(self, before: QRectF) -> None:
         # Во время рисования перерисовываем всё выделение целиком (фигуры живут только
         # в нём). Раньше перерисовывался лишь «хвост» штриха или рамка фигуры — это быстрее,
         # но на некоторых экранах (дробный масштаб Windows, драйверы) по краям таких
         # кусочков оставалась «рябь», пропадавшая только после отпускания кнопки.
         # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая.
-        self.update(self._selection_area(self._sel))
+        # Фигура, вышедшая за выделение, перерисовывается с запасом вокруг себя.
+        area = self._selection_area(self._sel)
+        shape = self._current or self._drag_step
+        now = shape.bounds() if shape else QRectF()
+        for r in (before, now):
+            if not r.isEmpty() and not QRectF(area).contains(r):
+                area = area.united(r.toAlignedRect().adjusted(-GAP, -GAP, GAP, GAP))
+        self.update(area)
 
     def _update_hover(self, old: QPoint) -> None:
         """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
         иначе перерисовывать нечего (кроме подсказки толщины)."""
         if not self._sel:
             w, h = self.width(), self.height()
+            k = GUIDE_PAD
             for pt in (old, self._mouse):
-                self.update(QRect(0, pt.y() - 1, w, 3))
-                self.update(QRect(pt.x() - 1, 0, 3, h))
+                self.update(QRect(0, pt.y() - k, w, 2 * k + 1))
+                self.update(QRect(pt.x() - k, 0, 2 * k + 1, h))
         elif self._width_hint:
             r = self._width + 90
             for pt in (old, self._mouse):
@@ -573,7 +655,8 @@ class Overlay(QWidget):
             p = QPainter(self._layer)
             p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
             for s in self._history.shapes:
-                s.paint(p)
+                if s is not self._drag_step:
+                    s.paint(p)
             p.end()
         return self._layer
 
@@ -632,10 +715,9 @@ class Overlay(QWidget):
     def _commit_text(self) -> None:
         if not self._editing:
             return
-        if not self._editing.is_empty():
-            self._history.push(self._editing)
-            self._layer_add(self._editing)
-        self._editing = None
+        ed, self._editing = self._editing, None
+        if not ed.is_empty():
+            self._push_shape(ed)
         self._caret_timer.stop()
         self._sync_toolbar()
         self.update()
@@ -752,14 +834,17 @@ class Overlay(QWidget):
 
         # Фигуры обрезаются по границе выделения — ровно так, как попадут в файл
         p.save()
-        p.setClipRect(self._sel)
+        p.setClipRect(self._sel, Qt.ClipOperation.IntersectClip)
         if self._history.shapes and self._sel.intersects(exposed):
             p.drawPixmap(0, 0, self._ensure_layer())
+        p.restore()
+        # Рисуемая сейчас фигура видна и за выделением: после отпускания оно расширится
         if self._current:
             self._current.paint(p)
+        if self._drag_step:
+            self._drag_step.paint(p)
         if self._editing:
             self._paint_text_editor(p)
-        p.restore()
 
         self._paint_frame(p)
         self._paint_size_label(p)
