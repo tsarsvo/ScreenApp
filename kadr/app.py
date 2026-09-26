@@ -354,7 +354,7 @@ class KadrApp(QObject):
         """Закрепить снимок поверх всех окон."""
         if top_left is None:
             top_left = QCursor.pos() - QPoint(40, 40)
-        pin = PinWindow(img, dpr, top_left, self.theme.tokens.accent)
+        pin = PinWindow(img, dpr, top_left, self.theme.tokens.accent, self.store.data.palette[:3])
         pin.copy_requested.connect(self._copy)
         pin.save_requested.connect(self._save)
         pin.closed.connect(lambda w: self._pins.remove(w) if w in self._pins else None)

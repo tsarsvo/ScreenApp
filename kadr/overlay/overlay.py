@@ -15,7 +15,7 @@ import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence,
-                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QTransform, QWheelEvent)
+                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTransform, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
 from ..capture import ScreenShot
@@ -31,6 +31,7 @@ HANDLE_R = 4.0           # радиус «ручки» изменения раз
 HANDLE_HIT = 9           # зона попадания по ручке
 GAP = 8                  # отступ панели от выделения
 MIN_SELECTION = 4        # меньше — считаем кликом, а не выделением
+OUTSIDE_OPACITY = 0.35   # фигуры за рамкой выделения: видны, но в файл не попадают
 GUIDE_PAD = 3            # запас при перерисовке направляющих (дробный масштаб Windows)
 
 # Ручки: (id, доля по x, доля по y)
@@ -622,14 +623,21 @@ class Overlay(QWidget):
         # ручки, рамка и «таблетка» с размером над левым верхним углом
         return r.adjusted(-HANDLE_HIT - 2, -34, 160, HANDLE_HIT + 2)
 
-    def _update_shape_area(self, _before: QRectF) -> None:
+    def _update_shape_area(self, before: QRectF) -> None:
         # Во время рисования перерисовываем всё выделение целиком (фигуры живут только
         # в нём). Раньше перерисовывался лишь «хвост» штриха или рамка фигуры — это быстрее,
         # но на некоторых экранах (дробный масштаб Windows, драйверы) по краям таких
         # кусочков оставалась «рябь», пропадавшая только после отпускания кнопки.
-        # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая,
-        # а за рамкой ничего не рисуется — там и обновлять нечего.
-        self.update(self._selection_area(self._sel))
+        # Благодаря кэшу готовых фигур полная перерисовка выделения всё равно дешёвая.
+        # Фигура, вышедшая за рамку (там она видна полупрозрачной), перерисовывается
+        # с запасом вокруг себя.
+        area = self._selection_area(self._sel)
+        shape = self._current or self._drag_step
+        now = shape.bounds() if shape else QRectF()
+        for r in (before, now):
+            if not r.isEmpty() and not QRectF(area).contains(r):
+                area = area.united(r.toAlignedRect().adjusted(-GAP, -GAP, GAP, GAP))
+        self.update(area)
 
     def _update_hover(self, old: QPoint) -> None:
         """Простое движение мыши. Без выделения — двигаются тонкие направляющие,
@@ -885,18 +893,22 @@ class Overlay(QWidget):
             return
 
         # Фигуры обрезаются по границе выделения — ровно так, как попадут в файл
-        # Всё обрезается по рамке выделения — ровно так, как попадёт в файл
-        p.save()
-        p.setClipRect(self._sel, Qt.ClipOperation.IntersectClip)
-        if self._history.shapes and self._sel.intersects(exposed):
-            p.drawPixmap(0, 0, self._ensure_layer())
-        if self._current:
-            self._current.paint(p)
-        if self._drag_step:
-            self._drag_step.paint(p)
-        if self._editing:
-            self._paint_text_editor(p)
-        p.restore()
+        # Внутри рамки фигуры рисуются как попадут в файл; то, что вышло за рамку, видно
+        # полупрозрачным — понятно, что рисуешь, но в снимок это не попадёт
+        outside = QRegion(self.rect()).subtracted(QRegion(self._sel))
+        for clip, opacity in ((outside, OUTSIDE_OPACITY), (QRegion(self._sel), 1.0)):
+            p.save()
+            p.setClipRegion(clip, Qt.ClipOperation.IntersectClip)
+            p.setOpacity(opacity)
+            if self._history.shapes and clip.boundingRect().intersects(exposed):
+                p.drawPixmap(0, 0, self._ensure_layer())
+            if self._current:
+                self._current.paint(p)
+            if self._drag_step:
+                self._drag_step.paint(p)
+            if self._editing:
+                self._paint_text_editor(p)
+            p.restore()
 
         self._paint_frame(p)
         self._paint_size_label(p)
