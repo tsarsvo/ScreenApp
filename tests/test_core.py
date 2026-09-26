@@ -839,3 +839,27 @@ def test_shape_outside_selection_is_visible_faded_but_not_saved(qapp):
     saved = o.render_selection()
     assert saved.width() == o._sel.width() * 2                   # в файл — только рамка
     o.close()
+
+
+def test_pin_close_button_top_right(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(400, 200, QImage.Format.Format_RGB32)
+    img.fill(QColor("#FFFFFF"))
+    w = PinWindow(img, 2.0, QPoint(100, 100))
+    w.show()
+    closed = []
+    w.closed.connect(closed.append)
+    r = w._close_rect()
+    assert r.right() > w.width() - 12 and r.top() < 12       # правый верхний угол
+    assert w._control_at(r.center().toPoint()) is None       # без наведения крестика нет
+    w._hover = True
+    assert w._control_at(r.center().toPoint()) == "close"
+    c = r.center()
+    qapp.sendEvent(w, QMouseEvent(QMouseEvent.Type.MouseButtonPress, c, QPointF(w.mapToGlobal(c)),
+                                  Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                                  Qt.KeyboardModifier.NoModifier))
+    assert closed
