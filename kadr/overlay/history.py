@@ -1,7 +1,7 @@
 """История действий рисования (undo / redo).
 
-Действие — добавление фигуры, перемещение нумерованного шага или изменение рамки
-(перенос / размер) прямоугольника и овала. Новое действие
+Действие — добавление или удаление фигуры, перемещение нумерованного шага или изменение
+геометрии (перенос / размер) прямоугольника, овала, стрелки, линии. Новое действие
 очищает стек redo, как в любом редакторе.
 """
 from __future__ import annotations
@@ -20,11 +20,12 @@ def _copy(geom: tuple[QPointF, QPointF]) -> tuple[QPointF, QPointF]:
 @dataclass
 class Action:
     shape: Shape
-    kind: str = "add"                  # add | move | geom
+    kind: str = "add"                  # add | del | move | geom
     old_pos: QPointF | None = None     # move: откуда и куда
     new_pos: QPointF | None = None
     old_geom: tuple[QPointF, QPointF] | None = None   # geom: (start, end) до и после
     new_geom: tuple[QPointF, QPointF] | None = None
+    index: int = -1                    # del: где фигура стояла (порядок рисования)
 
 
 class History:
@@ -45,6 +46,16 @@ class History:
         """Фигура уже передвинута — только запоминаем, чтобы можно было отменить."""
         self._record(Action(shape, "move", QPointF(old_pos), QPointF(new_pos)))
 
+    def remove(self, shape: Shape) -> None:
+        """Удалить фигуру (Del); Ctrl+Z вернёт её на прежнее место в порядке рисования."""
+        idx = self._index(shape)
+        del self._shapes[idx]
+        self._record(Action(shape, "del", index=idx))
+
+    def _index(self, shape: Shape) -> int:
+        # по идентичности, а не ==: две одинаковые фигуры (dataclass) равны
+        return next(i for i in range(len(self._shapes) - 1, -1, -1) if self._shapes[i] is shape)
+
     def push_geom(self, shape: Shape, old: tuple[QPointF, QPointF], new: tuple[QPointF, QPointF]) -> None:
         """Прямоугольник или овал уже передвинут / растянут — запоминаем для отмены."""
         self._record(Action(shape, "geom", old_geom=_copy(old), new_geom=_copy(new)))
@@ -61,10 +72,10 @@ class History:
             a.shape.pos = QPointF(a.old_pos)
         elif a.kind == "geom":
             a.shape.start, a.shape.end = _copy(a.old_geom)
+        elif a.kind == "del":
+            self._shapes.insert(a.index, a.shape)
         else:
-            # по идентичности, а не ==: две одинаковые фигуры (dataclass) равны
-            idx = next(i for i in range(len(self._shapes) - 1, -1, -1) if self._shapes[i] is a.shape)
-            del self._shapes[idx]
+            del self._shapes[self._index(a.shape)]
         self._undone.append(a)
         return a
 
@@ -76,6 +87,8 @@ class History:
             a.shape.pos = QPointF(a.new_pos)
         elif a.kind == "geom":
             a.shape.start, a.shape.end = _copy(a.new_geom)
+        elif a.kind == "del":
+            del self._shapes[self._index(a.shape)]
         else:
             self._shapes.append(a.shape)
         self._done.append(a)
