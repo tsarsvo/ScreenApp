@@ -997,3 +997,72 @@ def _wheel(w, dy):
     pt = QPointF(100, 50)
     return QWheelEvent(pt, QPointF(w.mapToGlobal(pt)), QPoint(), QPoint(0, dy), Qt.MouseButton.NoButton,
                        Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+
+
+def test_side_mouse_buttons_as_hotkeys(qapp):
+    """Боковые кнопки мыши («назад» / «вперёд») можно назначить — одни и с модификаторами."""
+    from kadr.hotkeys import Hotkey, hotkey_from_mouse, label_for, mouse_mods_match
+    from kadr.ui.widgets import HotkeyEdit
+
+    hk = Hotkey.parse("ctrl+mouse4")
+    assert hk and hk.is_mouse and hk.xbutton() == 1 and hk.serialize() == "ctrl+mouse4"
+    assert label_for("mouse5") == "Мышь 5 (вперёд)" and Hotkey.parse("mouse5").xbutton() == 2
+    assert hotkey_from_mouse(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier) is None
+    bindings = {(frozenset({"ctrl"}), 1): "region", (frozenset(), 2): "full"}
+    assert mouse_mods_match(bindings, {"ctrl"}, 1) == "region"
+    assert mouse_mods_match(bindings, set(), 1) is None          # без Ctrl — не наше, кнопка работает как обычно
+    assert mouse_mods_match(bindings, set(), 2) == "full"
+
+    edit = HotkeyEdit("print_screen")
+    edit.show()
+    got = []
+    edit.hotkey_changed.connect(got.append)
+    edit.click()                                                   # начать запись
+    assert edit._recording
+    QTest.mouseClick(edit, Qt.MouseButton.BackButton, Qt.KeyboardModifier.ShiftModifier)
+    assert got == ["shift+mouse4"] and not edit._recording
+    edit.click()
+    QTest.mouseClick(edit, Qt.MouseButton.ForwardButton)
+    assert got[-1] == "mouse5" and edit.text() == "Мышь 5 (вперёд)"
+    edit.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="низкоуровневый хук мыши есть только в Windows")
+def test_windows_mouse_hook_fires_on_side_button():
+    """Настоящий хук: имитируем нажатие боковой кнопки через SendInput — действие срабатывает."""
+    import ctypes
+    import time
+    import ctypes.wintypes as wintypes
+
+    from kadr.hotkeys import Hotkey, _WinMouseHook
+
+    fired = []
+    hook = _WinMouseHook(fired.append)
+    assert hook.add("region", Hotkey.parse("mouse5")) is None
+    assert hook.add("full", Hotkey.parse("mouse5")) is not None      # то же сочетание второй раз — ошибка
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+    class INPUT(ctypes.Structure):
+        # MOUSEINPUT — самый большой вариант union, поэтому INPUT = type + MOUSEINPUT (40 байт на x64)
+        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+    def send(flags):
+        inp = INPUT(0, MOUSEINPUT(0, 0, 2, flags, 0, 0))                # XBUTTON2 = «вперёд»
+        return ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+    try:
+        sent = send(0x0080)                                               # MOUSEEVENTF_XDOWN
+        if sent != 1:
+            pytest.skip(f"Windows не принимает имитацию ввода в этом окружении (код {ctypes.GetLastError()})")
+        send(0x0100)                                                      # MOUSEEVENTF_XUP
+        deadline = time.time() + 5
+        while not fired and time.time() < deadline:
+            time.sleep(0.05)
+        assert fired == ["region"]
+        assert not hook._swallow                                          # отпускание тоже «съели»
+    finally:
+        hook.clear()
+    assert hook._thread is None

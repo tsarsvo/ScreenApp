@@ -2,6 +2,8 @@
 
 * Windows — нативный RegisterHotKey + WM_HOTKEY через QAbstractNativeEventFilter.
   Работает без хуков, не требует прав и «съедает» сочетание (оно не уйдёт в другие программы).
+  Боковые кнопки мыши RegisterHotKey не умеет — для них ставится низкоуровневый хук мыши
+  (только пока такая кнопка назначена); нажатие тоже «съедается», чтобы браузер не листал назад.
 * macOS / Linux (X11) — слушатель клавиатуры pynput в фоновом потоке,
   событие передаётся в GUI-поток через Qt-сигнал (queued connection).
 
@@ -10,6 +12,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from dataclasses import dataclass
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QCoreApplication, QObject, Qt, Signal
@@ -37,6 +40,12 @@ _SPECIAL: dict[str, tuple[int, int, str]] = {
 for _n in range(1, 25):
     _SPECIAL[f"f{_n}"] = (int(Qt.Key.Key_F1) + _n - 1, 0x70 + _n - 1, f"F{_n}")
 
+# Боковые кнопки мыши: name -> (номер XBUTTON в Windows, кнопка Qt, подпись)
+_MOUSE: dict[str, tuple[int, Qt.MouseButton, str]] = {
+    "mouse4": (1, Qt.MouseButton.BackButton, "Мышь 4 (назад)"),
+    "mouse5": (2, Qt.MouseButton.ForwardButton, "Мышь 5 (вперёд)"),
+}
+
 # macOS virtual key codes (kVK_ANSI_*) — чтобы сочетание работало при любой раскладке
 _MAC_VK = {
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11,
@@ -61,7 +70,7 @@ class Hotkey:
         *mods, key = parts
         if any(m not in MOD_ORDER for m in mods):
             return None
-        if not (len(key) == 1 and key.isascii() and key.isalnum()) and key not in _SPECIAL:
+        if not (len(key) == 1 and key.isascii() and key.isalnum()) and key not in _SPECIAL and key not in _MOUSE:
             return None
         return cls(frozenset(mods), key)
 
@@ -71,10 +80,19 @@ class Hotkey:
     def label(self) -> str:
         names = {"ctrl": "Ctrl", "alt": "Option" if sys.platform == "darwin" else "Alt",
                  "shift": "Shift", "cmd": "Cmd" if sys.platform == "darwin" else "Win"}
-        key = _SPECIAL[self.key][2] if self.key in _SPECIAL else self.key.upper()
+        key = (_SPECIAL[self.key][2] if self.key in _SPECIAL else
+               _MOUSE[self.key][2] if self.key in _MOUSE else self.key.upper())
         return " + ".join([names[m] for m in MOD_ORDER if m in self.mods] + [key])
 
     # --- платформенные коды ----------------------------------------------
+    @property
+    def is_mouse(self) -> bool:
+        return self.key in _MOUSE
+
+    def xbutton(self) -> int:
+        """Номер боковой кнопки мыши в Windows (1 — «назад», 2 — «вперёд»)."""
+        return _MOUSE[self.key][0]
+
     def win_vk(self) -> int:
         if self.key in _SPECIAL:
             return _SPECIAL[self.key][1]
@@ -82,7 +100,7 @@ class Hotkey:
 
     def native_vk(self) -> int | None:
         """Код клавиши в терминах pynput на текущей ОС (для сравнения независимо от раскладки)."""
-        if self.key in _SPECIAL:
+        if self.key in _SPECIAL or self.key in _MOUSE:
             return None
         if sys.platform == "win32":
             return ord(self.key.upper())
@@ -96,14 +114,7 @@ def label_for(text: str) -> str:
     return hk.label() if hk else "—"
 
 
-def hotkey_from_event(event: QKeyEvent) -> Hotkey | None | str:
-    """Преобразует нажатие в Qt в Hotkey. Возвращает строку-ошибку, если сочетание не подходит."""
-    qk = event.key()
-    if qk in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta,
-              Qt.Key.Key_AltGr, Qt.Key.Key_unknown):
-        return None  # ждём основную клавишу
-
-    m = event.modifiers()
+def _mods_from_qt(m) -> set[str]:
     mods: set[str] = set()
     if sys.platform == "darwin":
         # В Qt на macOS ControlModifier — это Cmd, а MetaModifier — физический Control
@@ -120,6 +131,25 @@ def hotkey_from_event(event: QKeyEvent) -> Hotkey | None | str:
         mods.add("alt")
     if m & Qt.KeyboardModifier.ShiftModifier:
         mods.add("shift")
+    return mods
+
+
+def hotkey_from_mouse(button: Qt.MouseButton, modifiers) -> Hotkey | None:
+    """Боковая кнопка мыши (можно с Ctrl/Alt/Shift) → Hotkey; другие кнопки — None."""
+    for name, (_xb, qt_button, _lbl) in _MOUSE.items():
+        if button == qt_button:
+            return Hotkey(frozenset(_mods_from_qt(modifiers)), name)
+    return None
+
+
+def hotkey_from_event(event: QKeyEvent) -> Hotkey | None | str:
+    """Преобразует нажатие в Qt в Hotkey. Возвращает строку-ошибку, если сочетание не подходит."""
+    qk = event.key()
+    if qk in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta,
+              Qt.Key.Key_AltGr, Qt.Key.Key_unknown):
+        return None  # ждём основную клавишу
+
+    mods = _mods_from_qt(event.modifiers())
 
     key = None
     if Qt.Key.Key_A <= qk <= Qt.Key.Key_Z or Qt.Key.Key_0 <= qk <= Qt.Key.Key_9:
@@ -154,15 +184,18 @@ class _WinBackend(QAbstractNativeEventFilter):
     def __init__(self, on_fire) -> None:
         super().__init__()
         import ctypes
-        from ctypes import wintypes
+        import ctypes.wintypes as wintypes
 
         self._user32 = ctypes.windll.user32
         self._MSG = wintypes.MSG
         self._on_fire = on_fire
         self._ids: dict[int, str] = {}
+        self._mouse = _WinMouseHook(on_fire)
         QCoreApplication.instance().installNativeEventFilter(self)
 
     def register(self, action: str, hk: Hotkey) -> str | None:
+        if hk.is_mouse:
+            return self._mouse.add(action, hk)
         hid = len(self._ids) + 1
         mods = sum(self.MOD[m] for m in hk.mods) | self.MOD_NOREPEAT
         if not self._user32.RegisterHotKey(None, hid, mods, hk.win_vk()):
@@ -174,6 +207,7 @@ class _WinBackend(QAbstractNativeEventFilter):
         for hid in self._ids:
             self._user32.UnregisterHotKey(None, hid)
         self._ids.clear()
+        self._mouse.clear()
 
     def nativeEventFilter(self, event_type, message):
         if bytes(event_type) == b"windows_generic_MSG":
@@ -182,6 +216,110 @@ class _WinBackend(QAbstractNativeEventFilter):
                 self._on_fire(self._ids[msg.wParam])
                 return True, 0
         return False, 0
+
+
+def mouse_mods_match(bindings: dict[tuple[frozenset, int], str], mods: set[str], button: int) -> str | None:
+    """Действие для нажатой боковой кнопки при текущих модификаторах (точное совпадение)."""
+    return bindings.get((frozenset(mods), button))
+
+
+class _WinMouseHook:
+    """Низкоуровневый хук мыши (WH_MOUSE_LL) в отдельном потоке со своей очередью сообщений:
+    занятый интерфейс Kadr не задерживает мышь. Хук стоит, только пока назначена боковая кнопка."""
+
+    WH_MOUSE_LL = 14
+    WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
+    WM_QUIT = 0x0012
+    _VK_MODS = (("ctrl", 0x11), ("alt", 0x12), ("shift", 0x10), ("cmd", 0x5B), ("cmd", 0x5C))
+
+    def __init__(self, on_fire) -> None:
+        self._on_fire = on_fire
+        self._bindings: dict[tuple[frozenset, int], str] = {}
+        self._swallow: set[int] = set()        # отпускание «съеденной» кнопки тоже не пропускаем
+        self._thread: threading.Thread | None = None
+        self._tid = 0
+        self._error: str | None = None
+
+    def add(self, action: str, hk: Hotkey) -> str | None:
+        key = (hk.mods, hk.xbutton())
+        if key in self._bindings:
+            return "Это сочетание уже назначено на другое действие"
+        self._bindings[key] = action
+        if self._thread is None:
+            self._start()
+        if self._error:
+            self._bindings.pop(key, None)
+            return self._error
+        return None
+
+    def clear(self) -> None:
+        self._bindings = {}
+        if self._thread is not None:
+            import ctypes
+
+            ctypes.windll.user32.PostThreadMessageW(self._tid, self.WM_QUIT, 0, 0)
+            self._thread.join(timeout=2)
+            self._thread = None
+            self._tid = 0
+
+    def _start(self) -> None:
+        ready = threading.Event()
+        self._error = None
+        self._thread = threading.Thread(target=self._run, args=(ready,), daemon=True, name="kadr-mouse-hook")
+        self._thread.start()
+        ready.wait(2)
+        if self._error:
+            self._thread.join(timeout=1)
+            self._thread = None
+
+    def _mods_now(self, user32) -> set[str]:
+        return {name for name, vk in self._VK_MODS if user32.GetAsyncKeyState(vk) & 0x8000}
+
+    def _run(self, ready: threading.Event) -> None:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        lresult = ctypes.c_ssize_t
+
+        class MSLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [("pt", wintypes.POINT), ("mouseData", wintypes.DWORD), ("flags", wintypes.DWORD),
+                        ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+        hookproc = ctypes.WINFUNCTYPE(lresult, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+        user32.SetWindowsHookExW.argtypes = [ctypes.c_int, hookproc, wintypes.HINSTANCE, wintypes.DWORD]
+        user32.SetWindowsHookExW.restype = wintypes.HHOOK
+        user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+        user32.CallNextHookEx.restype = lresult
+        user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+        def proc(code, wparam, lparam):
+            if code == 0 and wparam in (self.WM_XBUTTONDOWN, self.WM_XBUTTONUP):
+                info = ctypes.cast(lparam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                button = (info.mouseData >> 16) & 0xFFFF
+                if wparam == self.WM_XBUTTONUP:
+                    if button in self._swallow:
+                        self._swallow.discard(button)
+                        return 1
+                elif action := mouse_mods_match(self._bindings, self._mods_now(user32), button):
+                    self._swallow.add(button)
+                    self._on_fire(action)          # сигнал Qt — доставится в GUI-поток
+                    return 1                       # кнопку «съели»: браузер не уйдёт назад
+            return user32.CallNextHookEx(None, code, wparam, lparam)
+
+        callback = hookproc(proc)                  # живёт, пока поток в цикле сообщений ниже
+        hook = user32.SetWindowsHookExW(self.WH_MOUSE_LL, callback, kernel32.GetModuleHandleW(None), 0)
+        if not hook:
+            self._error = "Не удалось перехватить кнопки мыши"
+            ready.set()
+            return
+        self._tid = kernel32.GetCurrentThreadId()
+        ready.set()
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            pass
+        user32.UnhookWindowsHookEx(hook)
 
 
 class _PynputBackend:
@@ -207,6 +345,25 @@ class _PynputBackend:
         self._listener = keyboard.Listener(on_press=self._press, on_release=self._release)
         self._listener.daemon = True
         self._listener.start()
+        try:                                        # боковые кнопки мыши (если система их отдаёт)
+            from pynput import mouse
+
+            self._mouse_listener = mouse.Listener(on_click=self._click)
+            self._mouse_listener.daemon = True
+            self._mouse_listener.start()
+        except Exception:
+            self._mouse_listener = None
+
+    _PYNPUT_SIDE = {"x1": "mouse4", "button8": "mouse4", "x2": "mouse5", "button9": "mouse5"}
+
+    def _click(self, _x, _y, button, pressed) -> None:
+        name = self._PYNPUT_SIDE.get(getattr(button, "name", ""))
+        if not pressed or name is None or self.paused:
+            return
+        for action, hk in self._bindings.items():
+            if hk.key == name and hk.mods == self._mods:
+                self._on_fire(action)
+                break
 
     def register(self, action: str, hk: Hotkey) -> str | None:
         self._bindings[action] = hk
@@ -221,6 +378,8 @@ class _PynputBackend:
         return ("code", getattr(key, "vk", None), (getattr(key, "char", None) or "").lower())
 
     def _matches(self, hk: Hotkey, key) -> bool:
+        if hk.is_mouse:
+            return False
         if hk.key in _SPECIAL:
             if isinstance(key, self._kb.Key):
                 return key.name == hk.key
