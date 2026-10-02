@@ -35,7 +35,7 @@ MIN_SELECTION = 4        # меньше — считаем кликом, а не
 OUTSIDE_OPACITY = 0.35   # фигуры за рамкой выделения: видны, но в файл не попадают
 GUIDE_PAD = 3            # запас при перерисовке направляющих (дробный масштаб Windows)
 SHAPE_HIT = 6            # за контур прямоугольника / овала можно взяться с таким запасом
-SHAPE_HANDLE = 3.5       # полуразмер квадратной ручки фигуры
+SHAPE_HANDLE_R = 3.5     # радиус круглой ручки фигуры
 
 # Ручки: (id, доля по x, доля по y)
 _HANDLES = [("tl", 0, 0), ("t", .5, 0), ("tr", 1, 0), ("r", 1, .5),
@@ -444,8 +444,11 @@ class Overlay(QWidget):
 
     @staticmethod
     def _shape_handles(shape: TwoPointShape) -> list[tuple[str, QPointF]]:
+        """Ручки фигуры. У овала — только четыре точки на самом контуре (сверху, справа,
+        снизу, слева): углы описанного квадрата висели бы в пустоте рядом с кругом."""
         r = shape.rect()
-        return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in _HANDLES]
+        handles = _HANDLES if isinstance(shape, RectShape) else [h for h in _HANDLES if len(h[0]) == 1]
+        return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in handles]
 
     def _has_shape(self, shape: Shape | None) -> bool:
         return shape is not None and any(s is shape for s in self._history.shapes)
@@ -1069,17 +1072,24 @@ class Overlay(QWidget):
             p.drawEllipse(pt, HANDLE_R, HANDLE_R)
 
     def _paint_shape_handles(self, p: QPainter) -> None:
-        """Квадратные ручки у прямоугольника / овала под курсором."""
+        """Аккуратные круглые ручки у прямоугольника / овала под курсором — в стиле ручек
+        выделения: белая точка с цветной обводкой и мягкой тенью."""
         s = self._hover_shape
         if self._mode not in ("idle", "editing") or not self._has_shape(s):
             return
-        pen = QPen(self._t.q("accent"), 1.2)
-        pen.setCosmetic(True)
-        p.setPen(pen)
-        p.setBrush(QColor("#FFFFFF"))
-        k = SHAPE_HANDLE
+        r = SHAPE_HANDLE_R
+        accent = self._t.q("accent")
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         for _hid, pt in self._shape_handles(s):
-            p.drawRect(QRectF(pt.x() - k, pt.y() - k, 2 * k, 2 * k))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 70))
+            p.drawEllipse(pt + QPointF(0, 0.6), r + 1.4, r + 1.4)      # тень — видно на любом фоне
+            p.setBrush(QColor("#FFFFFF"))
+            p.drawEllipse(pt, r + 0.8, r + 0.8)
+            p.setBrush(accent)
+            p.drawEllipse(pt, r - 0.9, r - 0.9)                       # цветная серединка
+        p.restore()
 
     def _pill(self, p: QPainter, rect: QRectF, text: str, font: QFont) -> None:
         p.setPen(Qt.PenStyle.NoPen)
