@@ -11,12 +11,13 @@
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 
 
 def _user32():
     import ctypes
-    from ctypes import wintypes
+    import ctypes.wintypes as wintypes
 
     u = ctypes.windll.user32
     u.GetForegroundWindow.restype = wintypes.HWND
@@ -41,19 +42,19 @@ def restore(hwnd: int) -> None:
     """Вернуть фокус окну, которое было активным до снимка."""
     if not hwnd or sys.platform != "win32":
         return
-    try:
+    # не вышло — не страшно: фокус просто останется там, где его оставила Windows
+    with contextlib.suppress(Exception):
         u = _user32()
         if u.IsWindow(hwnd) and u.IsWindowVisible(hwnd) and not u.IsIconic(hwnd) and u.GetForegroundWindow() != hwnd:
             u.SetForegroundWindow(hwnd)
-    except Exception:
-        pass
 
 
 def bring_to_front(hwnd: int) -> None:
     """Сделать окно активным, даже если активное окно не отдаёт фокус по обычной просьбе."""
     if not hwnd or sys.platform != "win32":
         return
-    try:
+    # не вышло — оверлей всё равно показан поверх всех окон, просто без клавиатуры
+    with contextlib.suppress(Exception):
         import ctypes
 
         u = _user32()
@@ -69,5 +70,3 @@ def bring_to_front(hwnd: int) -> None:
         finally:
             if attached:
                 u.AttachThreadInput(me, other, False)
-    except Exception:
-        pass
