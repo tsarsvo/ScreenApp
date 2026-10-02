@@ -85,7 +85,7 @@ def main() -> None:
 
         send_command(exe, "--full", env, work)
         shot = wait_for("скриншот всего экрана сохранён в WEBP (--full)",
-                        lambda: next((p for p in shots.glob("Kadr_*.webp") if p.stat().st_size > 1000), None), 30)
+                        lambda: next((p for p in shots.glob("Screenshot_*.webp") if p.stat().st_size > 1000), None), 30)
         print(f"    {shot.name}: {shot.stat().st_size // 1024} КБ")
 
         wait_for("запись повтора пишет сегменты",
@@ -100,7 +100,7 @@ def main() -> None:
 
         send_command(exe, "--save-replay", env, work)
         mp4 = wait_for("повтор сохранён (--save-replay)",
-                       lambda: next((p for p in shots.glob("Kadr_Replay_*.mp4") if p.stat().st_size > 1000), None),
+                       lambda: next((p for p in shots.glob("Video_*.mp4") if p.stat().st_size > 1000), None),
                        60)
         ffmpeg = exe.parent / "_internal" / "kadr" / "bin" / "ffmpeg.exe"
         check = subprocess.run([str(ffmpeg), "-v", "error", "-i", str(mp4), "-f", "null", "-"],

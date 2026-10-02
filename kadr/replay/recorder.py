@@ -22,12 +22,12 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, Signal
 
 from .. import APP_NAME
+from ..saver import VIDEO_PREFIX, numbered_path
 from . import ffmpeg as ff
 from .child import popen_tied
 
@@ -489,13 +489,12 @@ class ReplayRecorder(QObject):
                 raise RuntimeError("Буфер ещё пуст — подождите несколько секунд")
             folder = Path(save_dir).expanduser()
             folder.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            out = folder / f"{APP_NAME}_Replay_{stamp}.mp4"
-            n = 2
-            while out.exists():
-                out = folder / f"{APP_NAME}_Replay_{stamp}_{n}.mp4"
-                n += 1
-            concat_segments(exe, segs, out)
+            out = numbered_path(folder, VIDEO_PREFIX, "mp4")     # Video_1.mp4, Video_2.mp4…
+            try:
+                concat_segments(exe, segs, out)
+            except Exception:
+                out.unlink(missing_ok=True)          # не оставляем пустой зарезервированный файл
+                raise
             self.saved.emit(out)
         except Exception as exc:
             self.save_failed.emit(str(exc))

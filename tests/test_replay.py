@@ -379,3 +379,27 @@ def test_empty_probe_is_not_cached(monkeypatch, tmp_path):
     monkeypatch.setattr(ff, "has_filter", lambda e, n: False)
     assert ff.probe(str(exe), tmp_path) == ((), False)
     assert not (tmp_path / "ffmpeg-probe.json").exists()
+
+
+def test_replay_saved_as_numbered_video(monkeypatch, tmp_path):
+    r = rec.ReplayRecorder()
+    saved, failed = [], []
+    r.saved.connect(saved.append)
+    r.save_failed.connect(failed.append)
+    monkeypatch.setattr(rec.ff, "find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(rec, "wait_for_rollover", lambda *a: True)
+    monkeypatch.setattr(rec, "collect_segments", lambda *a: [tmp_path / "seg_000.ts"])
+    monkeypatch.setattr(rec, "concat_segments", lambda exe, segs, out: out.write_bytes(b"mp4"))
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "Video_4.mp4").write_bytes(b"old")
+    r._save(str(out_dir), 1)
+
+    def boom(*_a):
+        raise RuntimeError("concat")
+
+    monkeypatch.setattr(rec, "concat_segments", boom)
+    r._save(str(out_dir), 1)
+    _wait(lambda: True)
+    assert [p.name for p in saved] == ["Video_5.mp4"] and failed == ["concat"]
+    assert sorted(p.name for p in out_dir.iterdir()) == ["Video_4.mp4", "Video_5.mp4"]   # пустой не остался

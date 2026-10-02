@@ -1,25 +1,33 @@
 """Сохранение изображения в выбранном формате и копирование в буфер обмена."""
 from __future__ import annotations
 
-from datetime import datetime
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QGuiApplication, QImage, QImageWriter
 
-from . import APP_NAME
 from .config import Settings
 
 _EXT = {"png": "png", "jpg": "jpg", "webp": "webp"}
 
 
-def unique_path(folder: Path, ext: str, prefix: str = APP_NAME) -> Path:
-    """Свободное имя файла. Файл сразу создаётся (эксклюзивно), поэтому два сохранения,
-    идущие параллельно в фоне, никогда не получат одно и то же имя."""
-    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    n = 1
+SCREENSHOT_PREFIX = "Screenshot"
+VIDEO_PREFIX = "Video"
+
+
+def numbered_path(folder: Path, prefix: str, ext: str) -> Path:
+    """Следующее свободное имя вида Screenshot_1.png, Screenshot_2.png… — номер на единицу
+    больше самого большого в папке (у файлов с любым расширением). Файл сразу создаётся
+    (эксклюзивно), поэтому два сохранения, идущие параллельно в фоне, не получат одно имя."""
+    pattern = re.compile(rf"{re.escape(prefix)}_(\d+)\.\w+", re.IGNORECASE)
+    try:
+        names = [p.name for p in folder.iterdir()]
+    except OSError:
+        names = []
+    n = max((int(m.group(1)) for name in names if (m := pattern.fullmatch(name))), default=0) + 1
     while True:
-        path = folder / (f"{prefix}_{stamp}.{ext}" if n == 1 else f"{prefix}_{stamp}_{n}.{ext}")
+        path = folder / f"{prefix}_{n}.{ext}"
         try:
             with open(path, "xb"):
                 return path
@@ -32,7 +40,7 @@ def save_image(image: QImage, settings: Settings) -> Path:
     folder = Path(settings.save_dir).expanduser()
     folder.mkdir(parents=True, exist_ok=True)
     fmt = settings.image_format
-    path = unique_path(folder, _EXT[fmt])
+    path = numbered_path(folder, SCREENSHOT_PREFIX, _EXT[fmt])
 
     try:
         if fmt == "png":

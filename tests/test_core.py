@@ -61,8 +61,20 @@ def test_save_formats(qapp, tmp_path, fmt):
     path = save_image(img, Settings(save_dir=str(tmp_path), image_format=fmt, quality=80))
     assert path.suffix == f".{fmt}" and path.stat().st_size > 0
     assert QImage(str(path)).size() == img.size() or fmt == "webp"
-    # второй файл в ту же секунду не перезаписывает первый
-    assert save_image(img, Settings(save_dir=str(tmp_path), image_format=fmt)) != path
+    assert path.name == f"Screenshot_1.{fmt}"
+    # второй файл получает следующий номер, первый не перезаписывается
+    assert save_image(img, Settings(save_dir=str(tmp_path), image_format=fmt)).name == f"Screenshot_2.{fmt}"
+
+
+def test_numbered_names_continue_after_largest(tmp_path):
+    from kadr.saver import numbered_path
+
+    for name in ("Screenshot_3.png", "Screenshot_10.jpg", "screenshot_7.webp", "Screenshot_x.png",
+                 "Video_2.mp4", "Kadr_2026-01-01_10-00-00.png"):
+        (tmp_path / name).write_bytes(b"x")
+    assert numbered_path(tmp_path, "Screenshot", "png").name == "Screenshot_11.png"
+    assert numbered_path(tmp_path, "Screenshot", "png").name == "Screenshot_12.png"   # имя сразу занято
+    assert numbered_path(tmp_path, "Video", "mp4").name == "Video_3.mp4"
 
 
 # ---------------------------------------------------------------- autostart
