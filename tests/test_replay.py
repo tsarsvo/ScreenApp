@@ -269,3 +269,113 @@ def test_capture_that_worked_is_retried_not_replaced_by_gdigrab(monkeypatch, tmp
     time.sleep(0.1)
     r.stop(wait=True)
     assert tried == ["ddagrab_download"] * 4
+
+
+def _scripted_recorder(monkeypatch, tmp_path, outcomes, attempts=None, probe_results=None):
+    """Рекордер, у которого запуск FFmpeg заменён сценарием: outcomes(attempt, opts) → (ok, живёт)."""
+    r = rec.ReplayRecorder()
+    r.dir = tmp_path / "kadr-replay-test"
+    tried, errors, probes = [], [], []
+    r.error.connect(errors.append)
+
+    class Proc:
+        stdin = None
+
+        def __init__(self, alive):
+            self.alive = alive
+
+        def poll(self):
+            return None if self.alive else 1
+
+        def terminate(self):
+            self.alive = False
+
+        kill = terminate
+
+        def wait(self, timeout=None):
+            return 0
+
+    def launch(exe, attempt, opts, stop):
+        tried.append((attempt.video, opts.mic))
+        ok, alive = outcomes(attempt, opts, len(tried))
+        if ok:
+            r._proc = Proc(alive)
+        return ok, "" if ok else "boom"
+
+    def probe(exe, cache_dir=None, refresh=False):
+        probes.append(refresh)
+        return (probe_results or {}).get(refresh, (("h264_nvenc",), True))
+
+    monkeypatch.setattr(rec.ff, "find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(rec.ff, "probe", probe)
+    monkeypatch.setattr(rec, "plan_attempts", lambda enc, dda: list(attempts or [
+        Attempt("ddagrab_download", "h264_nvenc"), Attempt("gdigrab", "h264_nvenc")]) if enc else [])
+    for name in ("RETRY_MIN_S", "GIVE_UP_MIN_S", "GIVE_UP_MAX_S"):
+        monkeypatch.setattr(rec, name, 0.01)
+    monkeypatch.setattr(r, "_launch", launch)
+    return r, tried, errors, probes
+
+
+def _wait(cond, timeout=5):
+    from PySide6.QtCore import QCoreApplication
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    deadline = time.time() + timeout
+    while not cond() and time.time() < deadline:
+        time.sleep(0.02)
+    for _ in range(5):            # сигналы из фонового потока приходят через очередь событий
+        app.processEvents()
+        time.sleep(0.02)
+    return cond()
+
+
+def test_replay_keeps_trying_after_everything_failed(monkeypatch, tmp_path):
+    """Сразу после входа в Windows ничего не завелось — Kadr сообщает один раз, через паузу
+    проверяет кодеры заново и запускает запись, а не сдаётся до перезапуска."""
+    r, tried, errors, probes = _scripted_recorder(
+        monkeypatch, tmp_path, lambda a, o, n: (n > 8, True),
+        probe_results={False: ((), False), True: (("h264_nvenc",), True)})   # сначала кодеров «нет»
+    r.start(_opts())
+    assert _wait(lambda: r.running)
+    r.stop(wait=True)
+    _wait(lambda: True)
+    assert len(errors) == 1 and "снова" in errors[0]
+    assert probes[0] is False and True in probes          # кодеры проверены заново
+
+
+def test_replay_drops_missing_microphone_instead_of_failing(monkeypatch, tmp_path):
+    r, tried, errors, _ = _scripted_recorder(monkeypatch, tmp_path, lambda a, o, n: (not o.mic, True))
+    r.start(_opts(mic=True))
+    assert _wait(lambda: r.running)
+    r.stop(wait=True)
+    _wait(lambda: True)
+    assert tried[:2] == [("ddagrab_download", True), ("ddagrab_download", False)]
+    assert any("Микрофон" in e for e in errors)
+
+
+def test_replay_gives_ddagrab_time_before_gdigrab(monkeypatch, tmp_path):
+    r, tried, _, _ = _scripted_recorder(monkeypatch, tmp_path, lambda a, o, n: (n == 3, True))
+    r.start(_opts())
+    assert _wait(lambda: r.running)
+    r.stop(wait=True)
+    assert [v for v, _ in tried] == ["ddagrab_download"] * 3   # не ушли на gdigrab
+
+
+def test_launch_reports_unusable_folder(tmp_path):
+    r = rec.ReplayRecorder()
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    r.dir = blocker / "sub"                                # папку не создать
+    ok, err = r._launch("ffmpeg", Attempt("gdigrab", "libx264"), _opts(), __import__("threading").Event())
+    assert not ok and "папка" in err
+
+
+def test_empty_probe_is_not_cached(monkeypatch, tmp_path):
+    from kadr.replay import ffmpeg as ff
+
+    exe = tmp_path / "ffmpeg"
+    exe.write_text("")
+    monkeypatch.setattr(ff, "working_encoders", lambda e: ())
+    monkeypatch.setattr(ff, "has_filter", lambda e, n: False)
+    assert ff.probe(str(exe), tmp_path) == ((), False)
+    assert not (tmp_path / "ffmpeg-probe.json").exists()
