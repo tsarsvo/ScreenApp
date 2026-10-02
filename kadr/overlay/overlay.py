@@ -1072,13 +1072,14 @@ class Overlay(QWidget):
             p.drawEllipse(pt, HANDLE_R, HANDLE_R)
 
     def _paint_shape_handles(self, p: QPainter) -> None:
-        """Аккуратные круглые ручки у прямоугольника / овала под курсором — в стиле ручек
-        выделения: белая точка с цветной обводкой и мягкой тенью."""
+        """Аккуратные круглые ручки у прямоугольника / овала под курсором: белое кольцо
+        с серединкой цвета самой фигуры и мягкой тенью — видно, к какой фигуре они относятся."""
         s = self._hover_shape
         if self._mode not in ("idle", "editing") or not self._has_shape(s):
             return
         r = SHAPE_HANDLE_R
-        accent = self._t.q("accent")
+        color = QColor(s.color)
+        color.setAlpha(255)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         for _hid, pt in self._shape_handles(s):
@@ -1087,8 +1088,8 @@ class Overlay(QWidget):
             p.drawEllipse(pt + QPointF(0, 0.6), r + 1.4, r + 1.4)      # тень — видно на любом фоне
             p.setBrush(QColor("#FFFFFF"))
             p.drawEllipse(pt, r + 0.8, r + 0.8)
-            p.setBrush(accent)
-            p.drawEllipse(pt, r - 0.9, r - 0.9)                       # цветная серединка
+            p.setBrush(color)
+            p.drawEllipse(pt, r - 0.9, r - 0.9)                       # серединка цвета фигуры
         p.restore()
 
     def _pill(self, p: QPainter, rect: QRectF, text: str, font: QFont) -> None:
