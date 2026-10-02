@@ -153,10 +153,14 @@ def font_px_for_width(width: float) -> int:
 class TextShape(Shape):
     pos: QPointF = field(default_factory=QPointF)  # левый верхний угол
     text: str = ""
+    size: int = 0           # размер шрифта, px; 0 — по толщине кисти (Ctrl+колесо)
+
+    def font_px(self) -> int:
+        return self.size or font_px_for_width(self.width)
 
     def font(self) -> QFont:
         f = QFont()
-        f.setPixelSize(font_px_for_width(self.width))
+        f.setPixelSize(self.font_px())
         f.setWeight(QFont.Weight.DemiBold)
         return f
 
@@ -188,6 +192,24 @@ class TextShape(Shape):
         p.setPen(self.color)
         for i, line in enumerate(self.lines()):
             p.drawText(QPointF(self.pos.x(), self.pos.y() + fm.ascent() + i * fm.lineSpacing()), line)
+
+
+TEXT_MIN_PX, TEXT_MAX_PX = 8, 300
+
+
+def geometry(shape: Shape) -> tuple:
+    """Положение и размер фигуры, которые можно поменять мышью, — для отмены (Ctrl+Z).
+    Текст: (левый верхний угол, размер шрифта); стрелка, линия, рамка, овал: (начало, конец)."""
+    if isinstance(shape, TextShape):
+        return QPointF(shape.pos), shape.font_px()
+    return QPointF(shape.start), QPointF(shape.end)
+
+
+def set_geometry(shape: Shape, geom: tuple) -> None:
+    if isinstance(shape, TextShape):
+        shape.pos, shape.size = QPointF(geom[0]), int(geom[1])
+    else:
+        shape.start, shape.end = QPointF(geom[0]), QPointF(geom[1])
 
 
 @dataclass

@@ -1077,3 +1077,67 @@ def test_arrow_and_line_can_be_moved_and_reshaped(qapp):
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert arrow.start == QPointF(100, 300)
     o.close()
+
+
+def test_text_can_be_dragged_and_resized_by_corner(qapp):
+    from PySide6.QtCore import QPointF
+
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (20, 20), (780, 580))
+    o.set_tool(Tool.TEXT)
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 200))
+    QTest.keyClicks(o, "Hello")
+    QTest.keyClick(o, Qt.Key.Key_Escape)                     # Esc завершает ввод текста
+    (text,) = o._history.shapes
+    size0, box0 = text.font_px(), text.bounds_text()
+    inside = box0.center().toPoint()
+    QTest.mouseMove(o, inside)                               # инструментом «Текст» — тоже можно
+    assert o._hover_shape is text and o.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    _drag(o, (inside.x(), inside.y()), (inside.x() + 50, inside.y() + 30))
+    assert len(o._history.shapes) == 1                       # новый текст не начался
+    assert text.pos == box0.topLeft() + QPointF(50, 30) and text.font_px() == size0
+    br = dict(o._shape_handles(text))["br"]
+    QTest.mouseMove(o, br.toPoint())
+    assert o._editable_at(br.toPoint()) == (text, "br")
+    tl = QPointF(text.pos)
+    _drag(o, (round(br.x()), round(br.y())), (round(br.x()) + 60, round(br.y()) + 40))
+    assert text.font_px() > size0 * 1.4                       # шрифт крупнее…
+    assert text.pos == tl                                    # …а левый верхний угол на месте
+    o.set_tool(Tool.SELECT)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert text.font_px() == size0
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert text.pos == box0.topLeft()
+    o.close()
+
+
+def test_deleting_a_step_renumbers_the_following_ones(qapp):
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (20, 20), (780, 580))
+    o.set_tool(Tool.STEP)
+    for x in (100, 200, 300, 400):
+        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, 300))
+    s1, s2, s3, s4 = o._history.shapes
+    QTest.mouseMove(o, QPoint(201, 301))
+    assert o._hover_shape is s2
+    o._hover_hint_timer.timeout.emit()                       # подсказка «Del — удалить» — и у номеров
+    assert o._hover_hint_at is not None
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert o._history.shapes == [s1, s3, s4]
+    assert [s.number for s in (s1, s3, s4)] == [1, 2, 3]     # нумерация сплошная
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 300))
+    assert o._history.shapes[-1].number == 4                 # новый шаг продолжает счёт
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)   # убрали новый
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)   # вернули удалённый
+    assert o._history.shapes == [s1, s2, s3, s4] and [s.number for s in o._history.shapes] == [1, 2, 3, 4]
+    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert [s.number for s in (s1, s3, s4)] == [1, 2, 3] and s2 not in o._history.shapes
+    o._ensure_layer()
+    part = o._layer.toImage()
+    o._invalidate_layer()
+    assert _max_channel_diff(part, o._ensure_layer().toImage()) <= 2
+    o.close()
