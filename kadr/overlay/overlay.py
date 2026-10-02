@@ -18,6 +18,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication
                            QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTransform, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
+from .. import foreground
 from ..capture import ScreenShot
 from ..hotkeys import _MAC_VK
 from ..theme import Tokens
@@ -33,6 +34,8 @@ GAP = 8                  # отступ панели от выделения
 MIN_SELECTION = 4        # меньше — считаем кликом, а не выделением
 OUTSIDE_OPACITY = 0.35   # фигуры за рамкой выделения: видны, но в файл не попадают
 GUIDE_PAD = 3            # запас при перерисовке направляющих (дробный масштаб Windows)
+SHAPE_HIT = 6            # за контур прямоугольника / овала можно взяться с таким запасом
+SHAPE_HANDLE = 3.5       # полуразмер квадратной ручки фигуры
 
 # Ручки: (id, доля по x, доля по y)
 _HANDLES = [("tl", 0, 0), ("t", .5, 0), ("tr", 1, 0), ("r", 1, .5),
@@ -43,9 +46,27 @@ _HANDLE_CURSORS = {
     "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
+_EDITABLE = {Tool.SELECT: (RectShape, EllipseShape), Tool.RECT: (RectShape,), Tool.ELLIPSE: (EllipseShape,)}
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW, Qt.Key.Key_L: Tool.LINE,
               Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT,
               Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP}
+
+
+def _outline_distance(shape: TwoPointShape, pt: QPointF) -> float:
+    """Расстояние от точки до контура прямоугольника или овала."""
+    r = shape.rect()
+    if isinstance(shape, EllipseShape) and r.width() >= 2 and r.height() >= 2:
+        a, b = r.width() / 2, r.height() / 2
+        d = pt - r.center()
+        k = math.hypot(d.x() / a, d.y() / b)
+        if k == 0:
+            return min(a, b)
+        return abs(1 - 1 / k) * math.hypot(d.x(), d.y())   # вдоль луча из центра
+    dx = max(r.left() - pt.x(), 0.0, pt.x() - r.right())
+    dy = max(r.top() - pt.y(), 0.0, pt.y() - r.bottom())
+    if dx or dy:
+        return math.hypot(dx, dy)
+    return min(pt.x() - r.left(), r.right() - pt.x(), pt.y() - r.top(), r.bottom() - pt.y())
 
 
 def _is_key(event: QKeyEvent, key: Qt.Key) -> bool:
@@ -103,7 +124,7 @@ class Overlay(QWidget):
         self._history = History()
 
         self._sel: QRect | None = None
-        self._mode = "idle"            # idle | selecting | moving | resizing | drawing
+        self._mode = "idle"            # idle | selecting | moving | resizing | drawing | dragging | editing
         self._press = QPoint()
         self._sel_origin = QRect()
         self._handle: str | None = None
@@ -114,6 +135,13 @@ class Overlay(QWidget):
         self._drag_step: StepShape | None = None
         self._drag_from = QPointF()
         self._drag_offset = QPointF()
+        # Перенос и изменение размера готового прямоугольника / овала
+        self._edit_shape: TwoPointShape | None = None
+        self._edit_handle = ""            # move или ручка: tl | t | tr | …
+        self._edit_from: tuple[QPointF, QPointF] = (QPointF(), QPointF())
+        self._hover_shape: TwoPointShape | None = None   # у неё видны ручки
+        # Зажатый пробел во время выделения: рамка едет за мышью, размер не меняется
+        self._space = False
 
         # Плавное появление затемнения
         self._dim = 0.0
@@ -189,6 +217,7 @@ class Overlay(QWidget):
     def activate(self) -> None:
         self.raise_()
         self.activateWindow()
+        foreground.bring_to_front(int(self.winId()))   # Windows: даже поверх «Параметров» и игр
         self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def apply_theme(self, t: Tokens) -> None:
@@ -205,6 +234,7 @@ class Overlay(QWidget):
         self._layer = None
         self._layer_valid = False
         self._mode = "idle"
+        self._hover_shape = None
         self.toolbar.hide()
         self.popup.hide()
         self.update()
@@ -288,7 +318,7 @@ class Overlay(QWidget):
         self._commit_text()
         action = self._history.redo()
         if action:
-            if action.kind == "move":
+            if action.kind in ("move", "geom"):
                 self._invalidate_layer(self._action_area(action))
             else:
                 self._layer_add(action.shape)       # вернулась последней — просто дорисовать
@@ -301,6 +331,12 @@ class Overlay(QWidget):
         if action.kind == "move":
             d = action.new_pos - action.old_pos
             r = r.united(r.translated(d)).united(r.translated(-d))
+        elif action.kind == "geom":
+            shape, now = action.shape, (action.shape.start, action.shape.end)
+            for geom in (action.old_geom, action.new_geom):
+                shape.start, shape.end = geom
+                r = r.united(QRectF(self._shape_rect(shape)))
+            shape.start, shape.end = now
         return r
 
     def _push_shape(self, shape: Shape) -> None:
@@ -401,6 +437,46 @@ class Overlay(QWidget):
                 return s
         return None
 
+    @property
+    def _floating(self) -> Shape | None:
+        """Фигура, которую сейчас тащат: рисуется поверх, а не из кэша слоя."""
+        return self._drag_step or self._edit_shape
+
+    @staticmethod
+    def _shape_handles(shape: TwoPointShape) -> list[tuple[str, QPointF]]:
+        r = shape.rect()
+        return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in _HANDLES]
+
+    def _has_shape(self, shape: Shape | None) -> bool:
+        return shape is not None and any(s is shape for s in self._history.shapes)
+
+    def _editable_at(self, pos: QPoint) -> tuple[TwoPointShape, str] | None:
+        """Прямоугольник или овал под курсором: (фигура, ручка или «move»).
+        Берутся за контур — внутри рамки можно спокойно рисовать дальше. Править можно
+        инструментом «Выделение» или тем же, которым фигура нарисована: стрелку или линию
+        удобно начинать прямо от края рамки, и она не должна хватать рамку."""
+        kinds = _EDITABLE.get(self._tool)
+        if not kinds or self._sel is None or self._mode == "drawing" or self._editing:
+            return None
+        pt = QPointF(pos)
+        hover = self._hover_shape
+        if self._has_shape(hover):
+            for hid, hp in self._shape_handles(hover):
+                if abs(hp.x() - pt.x()) <= HANDLE_HIT - 2 and abs(hp.y() - pt.y()) <= HANDLE_HIT - 2:
+                    return hover, hid
+        for s in reversed(self._history.shapes):
+            if isinstance(s, kinds) and _outline_distance(s, pt) <= s.width / 2 + SHAPE_HIT:
+                return s, "move"
+        return None
+
+    def _set_hover_shape(self, shape: TwoPointShape | None) -> None:
+        if shape is self._hover_shape:
+            return
+        for s in (self._hover_shape, shape):
+            if s is not None:
+                self.update(self._shape_rect(s))
+        self._hover_shape = shape
+
     def _place_toolbar(self) -> None:
         """Панель рядом с выделением, не перекрывая его: снизу → сверху → внутри (крайний случай)."""
         if self._sel is None:
@@ -443,6 +519,7 @@ class Overlay(QWidget):
         self._press = pos
         handle = self._hit_handle(pos)
         step = None if handle else self._step_at(pos)
+        edit = None if handle or step else self._editable_at(pos)
         if handle:
             self._mode, self._handle, self._sel_origin = "resizing", handle, QRect(self._sel)
             self.toolbar.hide()
@@ -453,6 +530,14 @@ class Overlay(QWidget):
             self._drag_offset = step.pos - QPointF(e.position())
             self._invalidate_layer(QRectF(self._shape_rect(step)))
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif edit:
+            # взяли прямоугольник / овал за контур (перенос) или за ручку (размер)
+            shape, hid = edit
+            self._mode, self._edit_shape, self._edit_handle = "editing", shape, hid
+            self._edit_from = (QPointF(shape.start), QPointF(shape.end))
+            self._set_hover_shape(shape)
+            self._invalidate_layer(QRectF(self._shape_rect(shape)))
+            self.setCursor(Qt.CursorShape.ClosedHandCursor if hid == "move" else _HANDLE_CURSORS[hid])
         elif self._sel is not None and self._tool != Tool.SELECT and (
                 self._sel.contains(pos) or self._tool not in (Tool.TEXT, Tool.STEP)):
             # Линию, стрелку, рамку, кисть можно начать и за выделением (например, стрелку
@@ -482,6 +567,8 @@ class Overlay(QWidget):
             return
         old_sel = QRect(self._sel) if self._sel is not None else None
         if self._mode == "selecting":
+            if self._space:
+                self._press += pos - old_mouse     # пробел: рамка едет целиком
             end = self._constrain_square(self._press, pos) if shift else pos
             self._sel = QRect(self._press, end).normalized().intersected(bounds)
         elif self._mode == "moving":
@@ -505,7 +592,14 @@ class Overlay(QWidget):
                                           min(max(c.y(), s.top()), s.bottom()))
             self._update_shape_area(before)
             return
+        elif self._mode == "editing" and self._edit_shape:
+            before = self._edit_shape.bounds()
+            self._edit_geometry(QPointF(e.position()))
+            self._update_shape_area(before)
+            return
         else:
+            edit = self._editable_at(pos) if self._mode == "idle" else None
+            self._set_hover_shape(edit[0] if edit else None)
             self._update_cursor(pos)
             self._update_hover(old_mouse)
             return
@@ -516,6 +610,7 @@ class Overlay(QWidget):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         mode, self._mode = self._mode, "idle"
+        self._space = False
         if mode == "selecting":
             if self._sel.width() < MIN_SELECTION or self._sel.height() < MIN_SELECTION:
                 # Клик без протяжки (или случайное «дрожание» мыши) ничего не выделяет —
@@ -542,6 +637,15 @@ class Overlay(QWidget):
                 self._history.push_move(step, self._drag_from, step.pos)
                 self._sync_toolbar()
             self._invalidate_layer(area)             # шаг возвращается в слой на новом месте
+        elif mode == "editing" and self._edit_shape:
+            shape, self._edit_shape = self._edit_shape, None
+            new = (QPointF(shape.start), QPointF(shape.end))
+            if shape.is_empty():                     # стянули в точку — возвращаем как было
+                shape.start, shape.end = QPointF(self._edit_from[0]), QPointF(self._edit_from[1])
+            elif new != self._edit_from:
+                self._history.push_geom(shape, self._edit_from, new)
+                self._sync_toolbar()
+            self._invalidate_layer(QRectF(self._shape_rect(shape)))   # фигура возвращается в слой
         self._update_cursor(e.position().toPoint())
         self.update()
 
@@ -551,7 +655,8 @@ class Overlay(QWidget):
         # клик — это обычное нажатие: Qt присылает его как DoubleClick вместо Press.
         pos = e.position().toPoint()
         if (e.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT and self._sel
-                and self._sel.contains(pos) and self._hit_handle(pos) is None and not self._picking):
+                and self._sel.contains(pos) and self._hit_handle(pos) is None and not self._picking
+                and self._step_at(pos) is None and self._editable_at(pos) is None):
             self._copy()
             return
         self.mousePressEvent(e)
@@ -578,6 +683,7 @@ class Overlay(QWidget):
         if self._mode == "idle":
             old, self._mouse = self._mouse, QPoint(-100, -100)
             self._update_hover(old)
+            self._set_hover_shape(None)
         super().leaveEvent(e)
 
     def _update_cursor(self, pos: QPoint) -> None:
@@ -586,6 +692,8 @@ class Overlay(QWidget):
             self.setCursor(_HANDLE_CURSORS[handle])
         elif self._step_at(pos):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif edit := self._editable_at(pos):
+            self.setCursor(Qt.CursorShape.OpenHandCursor if edit[1] == "move" else _HANDLE_CURSORS[edit[1]])
         elif self._sel is not None and self._sel.contains(pos):
             if self._tool == Tool.SELECT:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -610,6 +718,26 @@ class Overlay(QWidget):
             bottom += d.y()
         return QRect(QPoint(left, top), QPoint(right, bottom)).normalized()
 
+    def _edit_geometry(self, pos: QPointF) -> None:
+        """Перенос (за контур) или изменение размера (за ручку) прямоугольника / овала."""
+        shape, (a, b) = self._edit_shape, self._edit_from
+        d = pos - QPointF(self._press)
+        if self._edit_handle == "move":
+            shape.start, shape.end = a + d, b + d
+            return
+        r, h = QRectF(a, b).normalized(), self._edit_handle
+        left, top, right, bottom = r.left(), r.top(), r.right(), r.bottom()
+        if "l" in h:
+            left += d.x()
+        if "r" in h:
+            right += d.x()
+        if "t" in h:
+            top += d.y()
+        if "b" in h:
+            bottom += d.y()
+        r = QRectF(QPointF(left, top), QPointF(right, bottom)).normalized()
+        shape.start, shape.end = r.topLeft(), r.bottomRight()
+
     @staticmethod
     def _constrain_square(a, b):
         dx, dy = b.x() - a.x(), b.y() - a.y()
@@ -632,7 +760,7 @@ class Overlay(QWidget):
         # Фигура, вышедшая за рамку (там она видна полупрозрачной), перерисовывается
         # с запасом вокруг себя.
         area = self._selection_area(self._sel)
-        shape = self._current or self._drag_step
+        shape = self._current or self._floating
         now = shape.bounds() if shape else QRectF()
         for r in (before, now):
             if not r.isEmpty() and not QRectF(area).contains(r):
@@ -679,7 +807,7 @@ class Overlay(QWidget):
             p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
             dirty = QRect()
             for s in self._history.shapes:
-                if s is not self._drag_step:
+                if s is not self._floating:
                     s.paint(p)
                     dirty = dirty.united(self._shape_rect(s))
             p.end()
@@ -709,7 +837,7 @@ class Overlay(QWidget):
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         logical = QRectF(dev.x() / dpr, dev.y() / dpr, dev.width() / dpr, dev.height() / dpr)
         for s in self._history.shapes:
-            if s is not self._drag_step and QRectF(self._shape_rect(s)).intersects(logical):
+            if s is not self._floating and QRectF(self._shape_rect(s)).intersects(logical):
                 s.paint(p)
         p.end()
         self._layer_dirty = self._layer_dirty.united(logical.toAlignedRect())
@@ -738,6 +866,7 @@ class Overlay(QWidget):
             self._caret_timer.start()
             return
         self._mode = "drawing"
+        self._set_hover_shape(None)
         self.update(self._selection_area(self._sel))   # ручки выделения прячутся на время рисования
         if self._tool == Tool.PEN:
             self._current = PenStroke(c, w, points=[pos])
@@ -803,6 +932,9 @@ class Overlay(QWidget):
         if self._editing and self._text_key(e, ctrl, shift):
             return
 
+        if e.key() == Qt.Key.Key_Space and self._mode == "selecting":
+            self._space = True          # держим пробел — рамка выделения двигается за мышью
+            return
         if self._picking:
             if e.key() == Qt.Key.Key_Escape:
                 self._stop_picking()
@@ -832,6 +964,11 @@ class Overlay(QWidget):
                 if _is_key(e, key):
                     self.set_tool(tool)
                     break
+
+    def keyReleaseEvent(self, e: QKeyEvent) -> None:
+        if e.key() == Qt.Key.Key_Space and not e.isAutoRepeat():
+            self._space = False
+        super().keyReleaseEvent(e)
 
     def _text_key(self, e: QKeyEvent, ctrl: bool, shift: bool) -> bool:
         """Ввод текста прямо на скриншоте. True — событие обработано."""
@@ -904,13 +1041,14 @@ class Overlay(QWidget):
                 p.drawPixmap(0, 0, self._ensure_layer())
             if self._current:
                 self._current.paint(p)
-            if self._drag_step:
-                self._drag_step.paint(p)
+            if self._floating:
+                self._floating.paint(p)
             if self._editing:
                 self._paint_text_editor(p)
             p.restore()
 
         self._paint_frame(p)
+        self._paint_shape_handles(p)
         self._paint_size_label(p)
         if self._width_hint:
             self._paint_width_hint(p)
@@ -929,6 +1067,19 @@ class Overlay(QWidget):
         p.setBrush(QColor("#FFFFFF"))
         for _hid, pt in self._handle_points():
             p.drawEllipse(pt, HANDLE_R, HANDLE_R)
+
+    def _paint_shape_handles(self, p: QPainter) -> None:
+        """Квадратные ручки у прямоугольника / овала под курсором."""
+        s = self._hover_shape
+        if self._mode not in ("idle", "editing") or not self._has_shape(s):
+            return
+        pen = QPen(self._t.q("accent"), 1.2)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(QColor("#FFFFFF"))
+        k = SHAPE_HANDLE
+        for _hid, pt in self._shape_handles(s):
+            p.drawRect(QRectF(pt.x() - k, pt.y() - k, 2 * k, 2 * k))
 
     def _pill(self, p: QPainter, rect: QRectF, text: str, font: QFont) -> None:
         p.setPen(Qt.PenStyle.NoPen)

@@ -23,6 +23,7 @@ _PATHS = {
            '<path d="M13.8 7l3.2 3.2"/>',
     "arrow": '<path d="M5 19L19 5"/><path d="M10 5h9v9"/>',
     "line": '<path d="M5 19L19 5"/>',
+    "loupe": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L20 20"/>',
     "rect": '<rect x="4" y="5.5" width="16" height="13" rx="1.5"/>',
     "ellipse": '<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>',
     "text": '<path d="M5 6.5V5h14v1.5"/><path d="M12 5v14"/><path d="M9.5 19h5"/>',

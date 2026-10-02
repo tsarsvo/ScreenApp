@@ -42,7 +42,8 @@ def remove_user_data() -> None:
     with contextlib.suppress(OSError):
         autostart.set_enabled(False)
     shutil.rmtree(config_dir(), ignore_errors=True)
-    shutil.rmtree(Path(tempfile.gettempdir()) / f"{APP_NAME.lower()}-replay", ignore_errors=True)
+    for d in Path(tempfile.gettempdir()).glob(f"{APP_NAME.lower()}-replay*"):   # папки записи повтора
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def remove_shortcuts() -> None:

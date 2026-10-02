@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import shutil
@@ -21,17 +22,21 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, Signal
 
 from .. import APP_NAME
+from ..saver import VIDEO_PREFIX, numbered_path
 from . import ffmpeg as ff
 from .child import popen_tied
 
 SEG = 5                      # длина сегмента, секунд
 STARTUP_CHECK_S = 4.0        # сколько ждать, чтобы понять, что FFmpeg стартовал нормально
+RETRY_MIN_S, RETRY_MAX_S = 2.0, 30.0   # повторы способа захвата, который уже работал
+EARLY_RETRIES = 3            # сколько раз дать ddagrab шанс при старте (2 + 4 + 8 с)
+GIVE_UP_MIN_S, GIVE_UP_MAX_S = 30.0, 300.0   # ничего не завелось — повтор через паузу
+STABLE_S = 60.0              # столько проработал без сбоев — счётчик перезапусков сбрасывается
 
 
 @dataclass
@@ -188,6 +193,13 @@ def concat_segments(ffmpeg: str, segments: list[Path], out: Path) -> None:
     raise RuntimeError("FFmpeg не смог склеить запись")
 
 
+def _remove_stale_dirs(own: Path) -> None:
+    """Папки записи от прошлых запусков (Kadr завершили принудительно) — удаляем."""
+    for d in own.parent.glob(f"{APP_NAME.lower()}-replay*"):
+        if d != own:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class ReplayRecorder(QObject):
     running_changed = Signal(bool)
     error = Signal(str)
@@ -196,7 +208,9 @@ class ReplayRecorder(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self.dir = Path(tempfile.gettempdir()) / f"{APP_NAME.lower()}-replay"
+        # своя папка у каждой копии Kadr: при перезапуске с правами администратора старая
+        # копия, закрываясь, не стирает записи новой (и не держит её файлы)
+        self.dir = Path(tempfile.gettempdir()) / f"{APP_NAME.lower()}-replay-{os.getpid()}"
         self._proc: subprocess.Popen | None = None
         self._pump = None
         self._opts: ReplayOptions | None = None
@@ -276,35 +290,87 @@ class ReplayRecorder(QObject):
             except subprocess.TimeoutExpired:
                 proc.kill()
 
+    def _set_running(self, on: bool) -> None:
+        if self.running != on:
+            self.running = on
+            self.running_changed.emit(on)
+
     def _run(self, opts: ReplayOptions, stop: threading.Event) -> None:
+        try:
+            self._run_forever(opts, stop)
+        except Exception as exc:          # фоновый поток не должен умирать молча
+            self._set_running(False)
+            self.error.emit(f"Запись повтора остановлена: {exc}")
+
+    def _run_forever(self, opts: ReplayOptions, stop: threading.Event) -> None:
+        """Запись не сдаётся: если ничего не завелось (например, сразу после входа в Windows
+        видеодрайвер ещё не готов), через паузу кодеры проверяются заново и запуск повторяется."""
         exe = ff.find_ffmpeg()
         if not exe:
             self.error.emit("FFmpeg не найден. Запустите scripts/fetch_ffmpeg.py или установите FFmpeg.")
             return
-        encoders, has_dda = ff.probe(exe, self.cache_dir)
-        attempts = plan_attempts(encoders, sys.platform == "win32" and has_dda)
-        if not attempts:
-            self.error.emit("Не найден ни один рабочий видеокодер H.264")
-            return
+        _remove_stale_dirs(self.dir)
+        refresh, reported, pause = False, False, GIVE_UP_MIN_S
+        while not stop.is_set():
+            encoders, has_dda = ff.probe(exe, self.cache_dir, refresh=refresh)
+            attempts = plan_attempts(encoders, sys.platform == "win32" and has_dda)
+            err = (self._run_attempts(exe, attempts, opts, stop) if attempts
+                   else "не найден ни один рабочий видеокодер H.264")
+            if stop.is_set():
+                return
+            self._set_running(False)
+            if not reported:                  # сообщаем один раз, дальше пробуем тихо
+                reported = True
+                self.error.emit(f"Запись повтора не запускается: {err or 'FFmpeg завершился с ошибкой'}. "
+                                "Kadr будет пробовать снова")
+            stop.wait(pause)
+            pause = min(pause * 2, GIVE_UP_MAX_S)
+            refresh = True                    # возможно, сменился драйвер — проверяем кодеры заново
 
+    def _run_attempts(self, exe: str, attempts: list[Attempt], opts: ReplayOptions,
+                      stop: threading.Event) -> str:
+        """Перебирает способы захвата; возвращает последнюю ошибку, когда ни один не держится."""
         restarts = 0
         idx = 0
         last_err = ""
-        reprobed = False
+        proven: set[int] = set()     # способы, которые уже работали в этом запуске
+        backoff = RETRY_MIN_S
+        early = 0                    # повторы ddagrab до перехода на gdigrab
         while not stop.is_set() and idx < len(attempts):
-            ok, last_err = self._launch(exe, attempts[idx], opts, stop)
+            attempt = attempts[idx]
+            ok, last_err = self._launch(exe, attempt, opts, stop)
+            if not ok and opts.mic and not stop.is_set():
+                # Микрофон выдернули или его занял другой — FFmpeg падает целиком.
+                # Без микрофона запись лучше, чем никакой.
+                ok, err = self._launch(exe, attempt, dataclasses.replace(opts, mic=False), stop)
+                if ok:
+                    opts = dataclasses.replace(opts, mic=False)
+                    self.error.emit("Микрофон недоступен — повтор пишется без него")
+            if stop.is_set():
+                return last_err
+            if not ok and idx in proven:
+                # Способ уже работал, а сейчас не запускается: ddagrab так ведёт себя, пока
+                # игра в монопольном полноэкранном режиме. Ждём и пробуем его же — запасной
+                # gdigrab копирует экран вместе с курсором, и курсор в игре начинал мигать.
+                self._set_running(False)
+                stop.wait(backoff)
+                backoff = min(backoff * 2, RETRY_MAX_S)
+                continue
+            if (not ok and not proven and early < EARLY_RETRIES and attempt.video.startswith("ddagrab")
+                    and idx + 1 < len(attempts) and attempts[idx + 1].video == "gdigrab"):
+                # Сразу после входа в Windows ddagrab бывает ещё недоступен — даём ему
+                # время, прежде чем перейти на gdigrab (с ним курсор мигает).
+                stop.wait(RETRY_MIN_S * 2 ** early)
+                early += 1
+                continue
             if not ok:
                 idx += 1          # этот кодер/способ не завёлся — пробуем следующий
-                if idx == len(attempts) and not reprobed and not stop.is_set():
-                    # Всё отказало — возможно, сменился драйвер видеокарты и кэш устарел
-                    reprobed = True
-                    encoders, has_dda = ff.probe(exe, self.cache_dir, refresh=True)
-                    attempts, idx = plan_attempts(encoders, sys.platform == "win32" and has_dda), 0
                 continue
-            self.encoder = attempts[idx].encoder
-            if not self.running:
-                self.running = True
-                self.running_changed.emit(True)
+            proven.add(idx)
+            backoff = RETRY_MIN_S
+            started = time.monotonic()
+            self.encoder = attempt.encoder
+            self._set_running(True)
             # Следим за процессом; если упал посреди работы — перезапускаем
             while not stop.is_set():
                 with self._lock:
@@ -313,24 +379,26 @@ class ReplayRecorder(QObject):
                     break
                 stop.wait(1.0)
             if stop.is_set():
-                return
+                return ""
             last_err = self._log_tail()
             self._kill()
+            if time.monotonic() - started > STABLE_S:
+                restarts = 0      # долго работал — это не «падает сразу», а редкий сбой
             restarts += 1
             if restarts > 3:
                 break
-            stop.wait(2.0)
-        if not stop.is_set():
-            self.running = False
-            self.running_changed.emit(False)
-            self.error.emit(f"Запись повтора остановлена: {last_err or 'FFmpeg завершился с ошибкой'}")
+            stop.wait(RETRY_MIN_S)
+        return last_err
 
     def _launch(self, exe: str, attempt: Attempt, opts: ReplayOptions, stop) -> tuple[bool, str]:
         shutil.rmtree(self.dir, ignore_errors=True)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            log = open(self.dir / "ffmpeg.log", "wb")  # noqa: SIM115 — открыт, пока пишет FFmpeg
+        except OSError as exc:
+            return False, f"папка записи недоступна: {exc}"
         audio_inputs, pump = self._audio_inputs(exe, opts)
         cmd = build_command(exe, attempt, opts, self.dir, audio_inputs)
-        log = open(self.dir / "ffmpeg.log", "wb")  # noqa: SIM115 — открыт, пока пишет FFmpeg
         try:
             # popen_tied: FFmpeg умрёт вместе с Kadr, даже если Kadr завершат принудительно
             proc = popen_tied(cmd, stdin=subprocess.PIPE if pump else subprocess.DEVNULL,
@@ -421,13 +489,12 @@ class ReplayRecorder(QObject):
                 raise RuntimeError("Буфер ещё пуст — подождите несколько секунд")
             folder = Path(save_dir).expanduser()
             folder.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            out = folder / f"{APP_NAME}_Replay_{stamp}.mp4"
-            n = 2
-            while out.exists():
-                out = folder / f"{APP_NAME}_Replay_{stamp}_{n}.mp4"
-                n += 1
-            concat_segments(exe, segs, out)
+            out = numbered_path(folder, VIDEO_PREFIX, "mp4")     # Video_1.mp4, Video_2.mp4…
+            try:
+                concat_segments(exe, segs, out)
+            except Exception:
+                out.unlink(missing_ok=True)          # не оставляем пустой зарезервированный файл
+                raise
             self.saved.emit(out)
         except Exception as exc:
             self.save_failed.emit(str(exc))

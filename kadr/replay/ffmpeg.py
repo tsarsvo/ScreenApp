@@ -78,7 +78,7 @@ def probe(ffmpeg: str, cache_dir: Path | None = None, refresh: bool = False) -> 
         working_encoders.cache_clear()
     encoders = working_encoders(ffmpeg)
     dda = has_filter(ffmpeg, "ddagrab") if sys.platform == "win32" else False
-    if cache and key:
+    if cache and key and encoders:   # пустой результат (драйвер ещё не готов) не запоминаем
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({"key": key, "encoders": list(encoders), "ddagrab": dda}),

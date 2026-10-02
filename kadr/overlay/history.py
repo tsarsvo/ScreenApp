@@ -1,6 +1,7 @@
 """История действий рисования (undo / redo).
 
-Действие — добавление фигуры или перемещение нумерованного шага. Новое действие
+Действие — добавление фигуры, перемещение нумерованного шага или изменение рамки
+(перенос / размер) прямоугольника и овала. Новое действие
 очищает стек redo, как в любом редакторе.
 """
 from __future__ import annotations
@@ -12,12 +13,18 @@ from PySide6.QtCore import QPointF
 from .shapes import Shape
 
 
+def _copy(geom: tuple[QPointF, QPointF]) -> tuple[QPointF, QPointF]:
+    return QPointF(geom[0]), QPointF(geom[1])
+
+
 @dataclass
 class Action:
     shape: Shape
-    kind: str = "add"                  # add | move
+    kind: str = "add"                  # add | move | geom
     old_pos: QPointF | None = None     # move: откуда и куда
     new_pos: QPointF | None = None
+    old_geom: tuple[QPointF, QPointF] | None = None   # geom: (start, end) до и после
+    new_geom: tuple[QPointF, QPointF] | None = None
 
 
 class History:
@@ -38,6 +45,10 @@ class History:
         """Фигура уже передвинута — только запоминаем, чтобы можно было отменить."""
         self._record(Action(shape, "move", QPointF(old_pos), QPointF(new_pos)))
 
+    def push_geom(self, shape: Shape, old: tuple[QPointF, QPointF], new: tuple[QPointF, QPointF]) -> None:
+        """Прямоугольник или овал уже передвинут / растянут — запоминаем для отмены."""
+        self._record(Action(shape, "geom", old_geom=_copy(old), new_geom=_copy(new)))
+
     def _record(self, action: Action) -> None:
         self._done.append(action)
         self._undone.clear()
@@ -48,6 +59,8 @@ class History:
         a = self._done.pop()
         if a.kind == "move":
             a.shape.pos = QPointF(a.old_pos)
+        elif a.kind == "geom":
+            a.shape.start, a.shape.end = _copy(a.old_geom)
         else:
             # по идентичности, а не ==: две одинаковые фигуры (dataclass) равны
             idx = next(i for i in range(len(self._shapes) - 1, -1, -1) if self._shapes[i] is a.shape)
@@ -61,6 +74,8 @@ class History:
         a = self._undone.pop()
         if a.kind == "move":
             a.shape.pos = QPointF(a.new_pos)
+        elif a.kind == "geom":
+            a.shape.start, a.shape.end = _copy(a.new_geom)
         else:
             self._shapes.append(a.shape)
         self._done.append(a)
