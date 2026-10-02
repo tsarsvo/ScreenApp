@@ -221,3 +221,51 @@ def test_save_waits_for_current_segment_to_finish(tmp_path):
     assert 0.3 < time.monotonic() - t0 < 3
     names = [p.name for p in collect_segments(tmp_path, minutes=1)]
     assert names[-1] == "seg_001.ts" and "seg_002.ts" not in names
+
+
+def test_capture_that_worked_is_retried_not_replaced_by_gdigrab(monkeypatch, tmp_path):
+    """ddagrab упал посреди записи (игра ушла в монопольный полноэкранный режим) и какое-то
+    время не запускается — Kadr ждёт и пробует его же, а не переходит на gdigrab:
+    с gdigrab курсор в игре начинал мигать."""
+    r = rec.ReplayRecorder()
+    r.dir = tmp_path
+    tried = []
+    script = iter([(True, False), (False, None), (False, None), (True, True)])   # (запустился, живёт)
+
+    class Proc:
+        stdin = None
+
+        def __init__(self, alive):
+            self.alive = alive
+
+        def poll(self):
+            return None if self.alive else 1
+
+        def terminate(self):
+            self.alive = False
+
+        kill = terminate
+
+        def wait(self, timeout=None):
+            return 0
+
+    def launch(exe, attempt, opts, stop):
+        tried.append(attempt.video)
+        ok, alive = next(script)
+        if ok:
+            r._proc = Proc(alive)
+        return ok, "" if ok else "DXGI_ERROR_ACCESS_LOST"
+
+    monkeypatch.setattr(rec.ff, "find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(rec.ff, "probe", lambda *a, **k: (("h264_nvenc",), True))
+    monkeypatch.setattr(rec, "plan_attempts", lambda enc, dda: [Attempt("ddagrab_download", "h264_nvenc"),
+                                                              Attempt("gdigrab", "h264_nvenc")])
+    monkeypatch.setattr(rec, "RETRY_MIN_S", 0.01)
+    monkeypatch.setattr(r, "_launch", launch)
+    r.start(_opts())
+    deadline = time.time() + 5
+    while len(tried) < 4 and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.1)
+    r.stop(wait=True)
+    assert tried == ["ddagrab_download"] * 4

@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QI
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import APP_ID, APP_NAME, __version__, admin, autostart, icons, topmost
+from . import APP_ID, APP_NAME, __version__, admin, autostart, foreground, icons, topmost
 from .capture import grab_full_desktop, grab_screens
 from .config import SettingsStore, config_dir
 from .hotkeys import HotkeyManager, label_for
@@ -65,6 +65,7 @@ class KadrApp(QObject):
         qapp.aboutToQuit.connect(lambda: self.replay.stop(wait=True))
         qapp.aboutToQuit.connect(self.store.flush)
         self._hidden_windows: list[int] = []     # окна, спрятанные на время выделения
+        self._prev_foreground = 0                # активное окно до выделения (Windows)
         qapp.aboutToQuit.connect(lambda: topmost.restore(self._hidden_windows))
 
         # Сохранение файлов идёт в фоне: кодирование 4K PNG/WEBP занимает 0.3–0.8 с,
@@ -310,6 +311,8 @@ class KadrApp(QObject):
         self.session.save_requested.connect(self._save)
         self.session.style_changed.connect(self._remember_style)
         self.session.finished.connect(self._on_session_finished)
+        # После выделения фокус вернётся этому окну (иначе в игре начинает мигать курсор)
+        self._prev_foreground = foreground.current()
         # Снимок уже сделан — окна «выше всех» (Диспетчер задач) не должны закрывать выделение
         self._hidden_windows = topmost.hide_over_overlay()
         self.session.start()
@@ -320,6 +323,8 @@ class KadrApp(QObject):
         self.session = None
         topmost.restore(self._hidden_windows)
         self._hidden_windows = []
+        foreground.restore(self._prev_foreground)
+        self._prev_foreground = 0
 
     def _remember_style(self, color: QColor, width: int) -> None:
         self.store.set("pen_color", color.name().upper())

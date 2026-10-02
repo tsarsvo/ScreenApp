@@ -6,7 +6,7 @@
   • двойной клик или Esc — закрыть, правый клик — меню (копировать, сохранить…);
   • крестик в правом верхнем углу (при наведении) — закрыть;
   • карандаш в правом нижнем углу — рисование прямо на снимке (три быстрых цвета),
-    рядом — копирование в буфер вместе с нарисованным.
+    рядом — копирование в буфер вместе с нарисованным и лупа (колесо — увеличение).
 """
 from __future__ import annotations
 
@@ -25,8 +25,12 @@ PANEL_PAD = 4
 PANEL_MARGIN = 6
 PEN_WIDTH = 3.0          # толщина линии в логических пикселях снимка
 QUICK_COLORS = ("#FF3B30", "#FF9500", "#FFCC00")
+LOUPE_R = 70             # радиус лупы
+LOUPE_ZOOM = 3.0
+LOUPE_MIN, LOUPE_MAX = 1.5, 12.0
 _TIPS = {"pen": "Рисовать на снимке (ещё раз — выключить) · Ctrl+Z — отменить",
          "copy": "Копировать в буфер обмена (вместе с рисунком)",
+         "loupe": "Лупа (ещё раз — выключить) · колесо — увеличение",
          "close": "Закрыть снимок"}
 
 _EDGE_CURSORS = {
@@ -50,8 +54,6 @@ class PinWindow(QWidget):
         self.setWindowTitle("Kadr — закреплённый снимок")
         self.setCursor(Qt.CursorShape.SizeAllCursor)
         self.setMouseTracking(True)
-        self.setToolTip("Перетащите · тяните за край — размер · колесо — масштаб · "
-                        "Ctrl+колесо — прозрачность · двойной клик или Esc — закрыть · правый клик — меню")
         self._image = image
         self._pixmap = QPixmap.fromImage(image)
         self._pixmap.setDevicePixelRatio(dpr)
@@ -71,6 +73,10 @@ class PinWindow(QWidget):
         self._strokes: list[tuple[QColor, float, list[QPointF]]] = []
         self._stroke: list[QPointF] | None = None
         self._icon_cache: dict[str, QPixmap] = {}
+        # Лупа: увеличенный кусок снимка вокруг курсора
+        self._loupe = False
+        self._loupe_zoom = LOUPE_ZOOM
+        self._mouse = QPointF(-1000, -1000)
         self._resize_to_scale()
         self.move(top_left - QPoint(BORDER, BORDER))
 
@@ -94,10 +100,54 @@ class PinWindow(QWidget):
         p.setPen(QPen(self._accent, BORDER))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
+        if self._loupe and self._hover and not self._control_at(self._mouse):
+            self._paint_loupe(p)
         if self._hover or self._drawing:
             self._paint_controls(p)
             self._paint_close(p)
 
+    def _paint_loupe(self, p: QPainter) -> None:
+        """Круглая лупа с центром под курсором; штрихи увеличиваются вместе со снимком."""
+        m = self._mouse
+        if not QRectF(self.rect()).adjusted(BORDER, BORDER, -BORDER, -BORDER).contains(m):
+            return
+        sx, sy = self._image_scale()
+        c = self._to_image(m)
+        hw, hh = LOUPE_R / (self._loupe_zoom * sx), LOUPE_R / (self._loupe_zoom * sy)
+        src = QRectF(c.x() - hw, c.y() - hh, 2 * hw, 2 * hh)
+        lens = QRectF(m.x() - LOUPE_R, m.y() - LOUPE_R, 2 * LOUPE_R, 2 * LOUPE_R)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 90))
+        p.drawEllipse(lens.adjusted(-3, -2, 3, 4))             # мягкая тень
+        clip = QPainterPath()
+        clip.addEllipse(lens)
+        p.setClipPath(clip)
+        p.fillRect(lens, QColor(32, 32, 34))                     # за краем снимка
+        p.translate(lens.topLeft())
+        p.scale(lens.width() / src.width(), lens.height() / src.height())
+        p.translate(-src.topLeft())
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)   # видны пиксели
+        part = src.intersected(QRectF(self._image.rect()))
+        if not part.isEmpty():
+            p.drawImage(part, self._image, part)
+        if self._strokes or self._stroke:
+            self._paint_strokes(p)
+        p.restore()
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor("#FFFFFF"), 2))
+        p.drawEllipse(lens)
+        p.setPen(QPen(QColor(0, 0, 0, 90), 1))
+        p.drawEllipse(lens.adjusted(-1.5, -1.5, 1.5, 1.5))
+        p.restore()
+
+    def set_loupe(self, on: bool) -> None:
+        self._loupe = on
+        self._update_cursor(self._mouse)
+        self.update()
     # ------------------------------------------------------------- рисование
     def _image_scale(self) -> tuple[float, float]:
         return ((self.width() - 2 * BORDER) / self._image.width(),
@@ -138,8 +188,18 @@ class PinWindow(QWidget):
     def set_drawing(self, on: bool) -> None:
         self._drawing = on
         self._stroke = None
-        self.setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.SizeAllCursor)
+        self._update_cursor(self._mouse)
         self.update()
+
+    def _update_cursor(self, pos) -> None:
+        if self._control_at(pos):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif self._drawing:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif edge := self._edge_at(pos):
+            self.setCursor(_EDGE_CURSORS[edge])
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor if self._loupe else Qt.CursorShape.SizeAllCursor)
 
     def _copy(self) -> None:
         self.copy_requested.emit(self.rendered_image())
@@ -149,7 +209,7 @@ class PinWindow(QWidget):
         """Кнопки справа налево: карандаш, копировать, в режиме рисования — цвета."""
         # раскладка справа налево — цвета в обратном порядке, чтобы слева направо шли как в палитре
         colors = [f"color{i}" for i in reversed(range(len(self._colors)))] if self._drawing else []
-        ids = ["pen", "copy"] + colors
+        ids = ["pen", "copy", "loupe"] + colors
         x = self.width() - BORDER - PANEL_MARGIN - PANEL_PAD - BTN
         y = self.height() - BORDER - PANEL_MARGIN - PANEL_PAD - BTN
         out = []
@@ -193,7 +253,7 @@ class PinWindow(QWidget):
                 p.drawEllipse(r.adjusted(4, 4, -4, -4))
                 p.setPen(Qt.PenStyle.NoPen)
                 continue
-            if cid == "pen" and self._drawing:           # включённый режим — подсвеченный кружок
+            if cid == "pen" and self._drawing or cid == "loupe" and self._loupe:   # включено — подсвеченный кружок
                 p.setBrush(self._accent)
                 p.drawEllipse(r)
             p.drawPixmap(QPointF(r.center().x() - 8, r.center().y() - 8), self._icon(cid))
@@ -212,9 +272,12 @@ class PinWindow(QWidget):
 
     def event(self, e) -> bool:
         if e.type() == QEvent.Type.ToolTip:
+            # подсказки только у кнопок: над самим снимком ничего не всплывает
             cid = self._control_at(e.pos())
-            text = _TIPS.get(cid, "Цвет линии") if cid else self.toolTip()
-            QToolTip.showText(e.globalPos(), text, self)
+            if cid:
+                QToolTip.showText(e.globalPos(), _TIPS.get(cid, "Цвет линии"), self)
+            else:
+                QToolTip.hideText()
             return True
         return super().event(e)
 
@@ -246,6 +309,9 @@ class PinWindow(QWidget):
         if cid == "copy":
             self._copy()
             return
+        if cid == "loupe":
+            self.set_loupe(not self._loupe)
+            return
         if cid == "close":
             self.close()
             return
@@ -266,20 +332,20 @@ class PinWindow(QWidget):
 
     def mouseMoveEvent(self, e) -> None:
         gp = e.globalPosition().toPoint()
+        self._mouse = e.position()
+        if self._loupe:
+            self.update()
         if self._stroke is not None and e.buttons() & Qt.MouseButton.LeftButton:
             self._stroke.append(self._to_image(e.position()))
             self.update()
-        elif self._control_at(e.position()):
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-        elif self._drawing:
-            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._control_at(e.position()) or self._drawing:
+            self._update_cursor(e.position())
         elif self._edge and self._resize_start and e.buttons() & Qt.MouseButton.LeftButton:
             self._resize_by_edge(gp)
         elif self._drag is not None and e.buttons() & Qt.MouseButton.LeftButton:
             self.move(gp - self._drag)
         else:
-            edge = self._edge_at(e.position())
-            self.setCursor(_EDGE_CURSORS[edge] if edge else Qt.CursorShape.SizeAllCursor)
+            self._update_cursor(e.position())
 
     def mouseReleaseEvent(self, _e) -> None:
         if self._stroke:
@@ -319,6 +385,11 @@ class PinWindow(QWidget):
         step = 1 if e.angleDelta().y() > 0 else -1
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.setWindowOpacity(min(1.0, max(0.2, self.windowOpacity() + 0.1 * step)))
+        elif self._loupe:
+            # с лупой колесо меняет её увеличение, а не размер снимка
+            k = 1.25 if step > 0 else 1 / 1.25
+            self._loupe_zoom = min(LOUPE_MAX, max(LOUPE_MIN, self._loupe_zoom * k))
+            self.update()
         else:
             # масштаб вокруг курсора
             before = e.position()
@@ -331,7 +402,13 @@ class PinWindow(QWidget):
 
     def keyPressEvent(self, e) -> None:
         if e.key() == Qt.Key.Key_Escape:
-            self.set_drawing(False) if self._drawing else self.close()   # сначала выходим из рисования
+            # сначала выходим из рисования и лупы, потом закрываем
+            if self._drawing:
+                self.set_drawing(False)
+            elif self._loupe:
+                self.set_loupe(False)
+            else:
+                self.close()
         elif e.key() == Qt.Key.Key_C and e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._copy()
         elif e.key() == Qt.Key.Key_Z and e.modifiers() & Qt.KeyboardModifier.ControlModifier and self._strokes:
@@ -344,6 +421,7 @@ class PinWindow(QWidget):
                          ("Сохранить в папку", lambda: self.save_requested.emit(self.rendered_image())),
                          ("Закончить рисование" if self._drawing else "Рисовать на снимке",
                           lambda: self.set_drawing(not self._drawing)),
+                         ("Убрать лупу" if self._loupe else "Лупа", lambda: self.set_loupe(not self._loupe)),
                          ("Исходный размер", self._reset_scale),
                          (None, None),
                          ("Закрыть", self.close)):

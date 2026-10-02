@@ -794,7 +794,7 @@ def test_pin_drawing_mode_quick_colors_and_copy(qapp):
         mouse(QMouseEvent.Type.MouseButtonRelease, (c.x(), c.y()), Qt.MouseButton.NoButton)
 
     ctrls = dict(w._controls())
-    assert set(ctrls) == {"pen", "copy"}                   # без режима рисования — только две кнопки
+    assert set(ctrls) == {"pen", "copy", "loupe"}                   # без режима рисования — без цветов
     click(ctrls["pen"])
     ctrls = dict(w._controls())
     assert w._drawing and {"color0", "color1", "color2"} <= set(ctrls)
@@ -811,7 +811,7 @@ def test_pin_drawing_mode_quick_colors_and_copy(qapp):
     QTest.keyClick(w, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert w.rendered_image().pixelColor(140, 100) == QColor("#FFFFFF")   # отменили
     click(dict(w._controls())["pen"])
-    assert not w._drawing and set(dict(w._controls())) == {"pen", "copy"}
+    assert not w._drawing and set(dict(w._controls())) == {"pen", "copy", "loupe"}
     w.close()
 
 
@@ -863,3 +863,125 @@ def test_pin_close_button_top_right(qapp):
                                   Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
                                   Qt.KeyboardModifier.NoModifier))
     assert closed
+
+
+def test_rect_and_ellipse_can_be_moved_and_resized_and_undone(qapp):
+    from PySide6.QtCore import QPointF
+
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (50, 50), (700, 550))
+    o.set_tool(Tool.RECT)
+    _drag(o, (100, 100), (200, 180))
+    o.set_tool(Tool.ELLIPSE)
+    _drag(o, (300, 300), (500, 400))
+    rect, ell = o._history.shapes
+    o.set_tool(Tool.ARROW)                               # стрелку можно начать от края рамки
+    assert o._editable_at(QPoint(150, 101)) is None
+    o.set_tool(Tool.SELECT)
+    QTest.mouseMove(o, QPoint(150, 150))                 # внутри прямоугольника — не за контур
+    assert o._editable_at(QPoint(150, 150)) is None
+    QTest.mouseMove(o, QPoint(130, 101))
+    assert o._hover_shape is rect and o.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    _drag(o, (130, 101), (150, 131))                     # перенос за контур
+    assert len(o._history.shapes) == 2                   # новый прямоугольник не нарисовался
+    assert rect.rect() == QRectF_(120, 130, 100, 80)
+    QTest.mouseMove(o, QPoint(220, 210))                 # ручка правого нижнего угла
+    assert o._editable_at(QPoint(220, 210)) == (rect, "br")
+    assert o.cursor().shape() == Qt.CursorShape.SizeFDiagCursor
+    _drag(o, (220, 210), (260, 250))
+    assert rect.rect() == QRectF_(120, 130, 140, 120)
+    _drag(o, (500, 350), (520, 330))                     # овал — за правую точку контура
+    assert ell.rect() == QRectF_(320, 280, 200, 100)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert ell.rect() == QRectF_(300, 300, 200, 100)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert rect.rect() == QRectF_(100, 100, 100, 80) and len(o._history.shapes) == 2
+    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert rect.start == QPointF(120, 130)
+    # слой после переноса и отмены совпадает с полной пересборкой
+    o._ensure_layer()
+    part = o._layer.toImage()
+    o._invalidate_layer()
+    assert _max_channel_diff(part, o._ensure_layer().toImage()) <= 2
+    o.close()
+
+
+def QRectF_(x, y, w, h):
+    from PySide6.QtCore import QRectF
+
+    return QRectF(x, y, w, h)
+
+
+def test_space_moves_selection_while_selecting(qapp):
+    o = _overlay(qapp)
+    QTest.mouseMove(o, QPoint(100, 100))
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
+    QTest.mouseMove(o, QPoint(200, 160))
+    QTest.keyPress(o, Qt.Key.Key_Space)
+    QTest.mouseMove(o, QPoint(260, 200))                 # с пробелом рамка едет целиком
+    assert o._sel == QRect(QPoint(160, 140), QPoint(260, 200))
+    QTest.keyRelease(o, Qt.Key.Key_Space)
+    QTest.mouseMove(o, QPoint(300, 240))                 # без пробела — снова растягивается
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 240))
+    assert o._sel == QRect(QPoint(160, 140), QPoint(300, 240))
+    o.close()
+
+
+def test_pin_loupe_magnifies_and_has_no_long_tooltip(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QHelpEvent, QMouseEvent
+    from PySide6.QtWidgets import QToolTip
+
+    from kadr.pin import PinWindow
+
+    img = QImage(400, 200, QImage.Format.Format_RGB32)
+    img.fill(QColor("#FFFFFF"))
+    for x in range(180, 220):
+        for y in range(80, 120):
+            img.setPixelColor(x, y, QColor("#FF0000"))    # красный квадрат 40×40 в центре
+    w = PinWindow(img, 2.0, QPoint(100, 100))              # 200×100 логических
+    w.show()
+    w._hover = True
+
+    def move(x, y):
+        pt = QPointF(x, y)
+        qapp.sendEvent(w, QMouseEvent(QMouseEvent.Type.MouseMove, pt, QPointF(w.mapToGlobal(pt)),
+                                      Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                      Qt.KeyboardModifier.NoModifier))
+
+    def pixel(x, y):
+        out = QImage(w.size(), QImage.Format.Format_RGB32)
+        w.render(out)
+        return out.pixelColor(x, y)
+
+    move(101, 51)
+    assert pixel(116, 51).green() > 200                   # без лупы рядом с квадратом — белое
+    c = dict(w._controls())["loupe"].center()
+    qapp.sendEvent(w, QMouseEvent(QMouseEvent.Type.MouseButtonPress, c, QPointF(w.mapToGlobal(c)),
+                                  Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                                  Qt.KeyboardModifier.NoModifier))
+    assert w._loupe
+    move(101, 51)
+    px = pixel(116, 51)
+    assert px.red() > 200 and px.green() < 60             # в лупе квадрат увеличен
+    zoom = w._loupe_zoom
+    w.wheelEvent(_wheel(w, 120))
+    assert w._loupe_zoom > zoom and w.width() == 202      # колесо — увеличение лупы, не размер окна
+    QTest.keyClick(w, Qt.Key.Key_Escape)
+    assert not w._loupe and w.isVisible()                 # Esc сначала выключает лупу
+    # над самим снимком длинная подсказка больше не всплывает
+    qapp.sendEvent(w, QHelpEvent(QHelpEvent.Type.ToolTip, QPoint(50, 50), w.mapToGlobal(QPoint(50, 50))))
+    assert QToolTip.text() == ""
+    w.close()
+
+
+def _wheel(w, dy):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    pt = QPointF(100, 50)
+    return QWheelEvent(pt, QPointF(w.mapToGlobal(pt)), QPoint(), QPoint(0, dy), Qt.MouseButton.NoButton,
+                       Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)

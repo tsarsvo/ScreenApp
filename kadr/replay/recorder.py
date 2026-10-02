@@ -32,6 +32,8 @@ from .child import popen_tied
 
 SEG = 5                      # длина сегмента, секунд
 STARTUP_CHECK_S = 4.0        # сколько ждать, чтобы понять, что FFmpeg стартовал нормально
+RETRY_MIN_S, RETRY_MAX_S = 2.0, 30.0   # повторы способа захвата, который уже работал
+STABLE_S = 60.0              # столько проработал без сбоев — счётчик перезапусков сбрасывается
 
 
 @dataclass
@@ -291,8 +293,17 @@ class ReplayRecorder(QObject):
         idx = 0
         last_err = ""
         reprobed = False
+        proven: set[int] = set()     # способы, которые уже работали в этом запуске
+        backoff = RETRY_MIN_S
         while not stop.is_set() and idx < len(attempts):
             ok, last_err = self._launch(exe, attempts[idx], opts, stop)
+            if not ok and idx in proven:
+                # Способ уже работал, а сейчас не запускается: ddagrab так ведёт себя, пока
+                # игра в монопольном полноэкранном режиме. Ждём и пробуем его же — запасной
+                # gdigrab копирует экран вместе с курсором, и курсор в игре начинал мигать.
+                stop.wait(backoff)
+                backoff = min(backoff * 2, RETRY_MAX_S)
+                continue
             if not ok:
                 idx += 1          # этот кодер/способ не завёлся — пробуем следующий
                 if idx == len(attempts) and not reprobed and not stop.is_set():
@@ -301,6 +312,9 @@ class ReplayRecorder(QObject):
                     encoders, has_dda = ff.probe(exe, self.cache_dir, refresh=True)
                     attempts, idx = plan_attempts(encoders, sys.platform == "win32" and has_dda), 0
                 continue
+            proven.add(idx)
+            backoff = RETRY_MIN_S
+            started = time.monotonic()
             self.encoder = attempts[idx].encoder
             if not self.running:
                 self.running = True
@@ -316,10 +330,12 @@ class ReplayRecorder(QObject):
                 return
             last_err = self._log_tail()
             self._kill()
+            if time.monotonic() - started > STABLE_S:
+                restarts = 0      # долго работал — это не «падает сразу», а редкий сбой
             restarts += 1
             if restarts > 3:
                 break
-            stop.wait(2.0)
+            stop.wait(RETRY_MIN_S)
         if not stop.is_set():
             self.running = False
             self.running_changed.emit(False)
