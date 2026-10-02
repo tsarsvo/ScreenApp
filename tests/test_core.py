@@ -1032,7 +1032,7 @@ def test_windows_mouse_hook_fires_on_side_button():
     """Настоящий хук: имитируем нажатие боковой кнопки через SendInput — действие срабатывает."""
     import ctypes
     import time
-    from ctypes import wintypes
+    import ctypes.wintypes as wintypes
 
     from kadr.hotkeys import Hotkey, _WinMouseHook
 

@@ -184,7 +184,7 @@ class _WinBackend(QAbstractNativeEventFilter):
     def __init__(self, on_fire) -> None:
         super().__init__()
         import ctypes
-        from ctypes import wintypes
+        import ctypes.wintypes as wintypes
 
         self._user32 = ctypes.windll.user32
         self._MSG = wintypes.MSG
@@ -277,7 +277,7 @@ class _WinMouseHook:
 
     def _run(self, ready: threading.Event) -> None:
         import ctypes
-        from ctypes import wintypes
+        import ctypes.wintypes as wintypes
 
         user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
         lresult = ctypes.c_ssize_t
@@ -308,7 +308,7 @@ class _WinMouseHook:
                     return 1                       # кнопку «съели»: браузер не уйдёт назад
             return user32.CallNextHookEx(None, code, wparam, lparam)
 
-        callback = hookproc(proc)                  # держим ссылку, пока работает хук
+        callback = hookproc(proc)                  # живёт, пока поток в цикле сообщений ниже
         hook = user32.SetWindowsHookExW(self.WH_MOUSE_LL, callback, kernel32.GetModuleHandleW(None), 0)
         if not hook:
             self._error = "Не удалось перехватить кнопки мыши"
@@ -320,7 +320,6 @@ class _WinMouseHook:
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             pass
         user32.UnhookWindowsHookEx(hook)
-        del callback
 
 
 class _PynputBackend:
