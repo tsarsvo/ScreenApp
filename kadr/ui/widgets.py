@@ -5,7 +5,7 @@ from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, Q
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen
 from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QHBoxLayout, QPushButton, QWidget
 
-from ..hotkeys import Hotkey, hotkey_from_event, hotkey_from_mouse, label_for
+from ..hotkeys import Hotkey, hotkey_from_event, label_for
 from ..theme import Tokens
 
 
@@ -72,8 +72,8 @@ class ToggleSwitch(QAbstractButton):
 
 
 class HotkeyEdit(QPushButton):
-    """Кнопка записи сочетания: клик → нажмите любую клавишу, сочетание или боковую кнопку
-    мыши (можно с Ctrl/Alt/Shift) → готово. Esc — отмена, Backspace — очистить."""
+    """Кнопка записи сочетания: клик → нажмите любую клавишу или сочетание → готово.
+    Esc — отмена, Backspace — очистить."""
 
     recording_changed = Signal(bool)
     hotkey_changed = Signal(str)
@@ -98,7 +98,7 @@ class HotkeyEdit(QPushButton):
 
     def _refresh(self) -> None:
         self.setProperty("recording", self._recording)
-        self.setText("Нажмите клавишу или кнопку мыши…" if self._recording else label_for(self._value))
+        self.setText("Нажмите сочетание…" if self._recording else label_for(self._value))
         self.style().unpolish(self)
         self.style().polish(self)
 
@@ -121,13 +121,6 @@ class HotkeyEdit(QPushButton):
         if self._recording:
             self._stop()
         super().focusOutEvent(e)
-
-    def mousePressEvent(self, e) -> None:
-        # Боковые кнопки мыши («назад» / «вперёд») тоже можно назначить
-        if self._recording and (hk := hotkey_from_mouse(e.button(), e.modifiers())):
-            self._finish(hk)
-            return
-        super().mousePressEvent(e)
 
     def keyReleaseEvent(self, e: QKeyEvent) -> None:
         # Windows не присылает нажатие PrtSc — только отпускание. Ловим его здесь.

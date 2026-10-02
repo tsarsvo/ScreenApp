@@ -999,70 +999,81 @@ def _wheel(w, dy):
                        Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
 
 
-def test_side_mouse_buttons_as_hotkeys(qapp):
-    """Боковые кнопки мыши («назад» / «вперёд») можно назначить — одни и с модификаторами."""
-    from kadr.hotkeys import Hotkey, hotkey_from_mouse, label_for, mouse_mods_match
-    from kadr.ui.widgets import HotkeyEdit
 
-    hk = Hotkey.parse("ctrl+mouse4")
-    assert hk and hk.is_mouse and hk.xbutton() == 1 and hk.serialize() == "ctrl+mouse4"
-    assert label_for("mouse5") == "Мышь 5 (вперёд)" and Hotkey.parse("mouse5").xbutton() == 2
-    assert hotkey_from_mouse(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier) is None
-    bindings = {(frozenset({"ctrl"}), 1): "region", (frozenset(), 2): "full"}
-    assert mouse_mods_match(bindings, {"ctrl"}, 1) == "region"
-    assert mouse_mods_match(bindings, set(), 1) is None          # без Ctrl — не наше, кнопка работает как обычно
-    assert mouse_mods_match(bindings, set(), 2) == "full"
+def test_delete_hovered_shape_with_hint_and_undo(qapp):
+    from kadr.overlay.overlay import HOVER_HINT_TEXT
+    from kadr.overlay.shapes import Tool
 
-    edit = HotkeyEdit("print_screen")
-    edit.show()
-    got = []
-    edit.hotkey_changed.connect(got.append)
-    edit.click()                                                   # начать запись
-    assert edit._recording
-    QTest.mouseClick(edit, Qt.MouseButton.BackButton, Qt.KeyboardModifier.ShiftModifier)
-    assert got == ["shift+mouse4"] and not edit._recording
-    edit.click()
-    QTest.mouseClick(edit, Qt.MouseButton.ForwardButton)
-    assert got[-1] == "mouse5" and edit.text() == "Мышь 5 (вперёд)"
-    edit.close()
+    o = _overlay(qapp)
+    _drag(o, (50, 50), (700, 550))
+    o.set_tool(Tool.RECT)
+    _drag(o, (100, 100), (200, 180))
+    o.set_tool(Tool.ARROW)
+    _drag(o, (300, 300), (500, 300))
+    rect, arrow = o._history.shapes
+    o.set_tool(Tool.SELECT)
+    QTest.keyClick(o, Qt.Key.Key_Delete)                    # курсор не на фигуре — ничего не удаляется
+    assert len(o._history.shapes) == 2
+    QTest.mouseMove(o, QPoint(130, 101))
+    assert o._hover_shape is rect and o._hover_hint_timer.isActive()
+    assert o._hover_hint_at is None                         # подсказка — только после задержки
+    o._hover_hint_timer.timeout.emit()                      # прошло 2 секунды
+    assert o._hover_hint_at is not None
+    img = QImage(o.size(), QImage.Format.Format_RGB32)
+    o.render(img)
+    r = o._hover_hint_rect()
+    assert img.pixelColor(r.left() + 3, r.center().y()).lightness() < 120   # тёмная «таблетка» видна
+    assert HOVER_HINT_TEXT.startswith("Del")
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert o._history.shapes == [arrow] and o._hover_hint_at is None
+    QTest.mouseMove(o, QPoint(400, 301))                    # стрелку — тоже
+    assert o._hover_shape is arrow
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert not o._history.shapes
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert o._history.shapes[0] is rect and o._history.shapes[1] is arrow   # вернулись в прежнем порядке
+    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert o._history.shapes == [arrow]
+    o._ensure_layer()
+    part = o._layer.toImage()
+    o._invalidate_layer()
+    assert _max_channel_diff(part, o._ensure_layer().toImage()) <= 2
+    o.close()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="низкоуровневый хук мыши есть только в Windows")
-def test_windows_mouse_hook_fires_on_side_button():
-    """Настоящий хук: имитируем нажатие боковой кнопки через SendInput — действие срабатывает."""
-    import ctypes
-    import time
-    import ctypes.wintypes as wintypes
+def test_arrow_and_line_can_be_moved_and_reshaped(qapp):
+    from PySide6.QtCore import QPointF
 
-    from kadr.hotkeys import Hotkey, _WinMouseHook
+    from kadr.overlay.shapes import Tool
 
-    fired = []
-    hook = _WinMouseHook(fired.append)
-    assert hook.add("region", Hotkey.parse("mouse5")) is None
-    assert hook.add("full", Hotkey.parse("mouse5")) is not None      # то же сочетание второй раз — ошибка
-
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
-                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
-
-    class INPUT(ctypes.Structure):
-        # MOUSEINPUT — самый большой вариант union, поэтому INPUT = type + MOUSEINPUT (40 байт на x64)
-        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
-
-    def send(flags):
-        inp = INPUT(0, MOUSEINPUT(0, 0, 2, flags, 0, 0))                # XBUTTON2 = «вперёд»
-        return ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-
-    try:
-        sent = send(0x0080)                                               # MOUSEEVENTF_XDOWN
-        if sent != 1:
-            pytest.skip(f"Windows не принимает имитацию ввода в этом окружении (код {ctypes.GetLastError()})")
-        send(0x0100)                                                      # MOUSEEVENTF_XUP
-        deadline = time.time() + 5
-        while not fired and time.time() < deadline:
-            time.sleep(0.05)
-        assert fired == ["region"]
-        assert not hook._swallow                                          # отпускание тоже «съели»
-    finally:
-        hook.clear()
-    assert hook._thread is None
+    o = _overlay(qapp)
+    _drag(o, (50, 50), (700, 550))
+    o.set_tool(Tool.LINE)
+    _drag(o, (100, 100), (300, 100))
+    o.set_tool(Tool.ARROW)
+    _drag(o, (100, 300), (300, 400))
+    line, arrow = o._history.shapes
+    o.set_tool(Tool.LINE)
+    assert o._editable_at(QPoint(200, 352)) is None         # инструмент «Линия» стрелку не хватает
+    QTest.mouseMove(o, QPoint(200, 101))
+    assert o._hover_shape is line and o.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    _drag(o, (200, 101), (220, 131))                        # перенос за саму линию
+    assert len(o._history.shapes) == 2
+    assert (line.start, line.end) == (QPointF(120, 130), QPointF(320, 130))
+    QTest.mouseMove(o, QPoint(320, 130))
+    assert o._editable_at(QPoint(320, 130)) == (line, "p2")
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(320, 130))
+    QTest.mouseMove(o, QPoint(400, 214))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(400, 214))
+    assert line.start == QPointF(120, 130) and line.end == QPointF(400, 214)
+    o.set_tool(Tool.SELECT)
+    QTest.mouseMove(o, QPoint(200, 351))                    # точка на стрелке
+    assert o._hover_shape is arrow
+    QTest.mouseMove(o, QPoint(100, 300))
+    assert o._editable_at(QPoint(100, 300)) == (arrow, "p1")
+    _drag(o, (100, 300), (150, 250))
+    assert arrow.start == QPointF(150, 250) and arrow.end == QPointF(300, 400)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert arrow.start == QPointF(100, 300)
+    o.close()
