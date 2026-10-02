@@ -24,7 +24,8 @@ from ..hotkeys import _MAC_VK
 from ..theme import Tokens
 from .history import History
 from .shapes import (ArrowShape, EllipseShape, LineShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
-                     TextShape, Tool, TwoPointShape, font_px_for_width, marker_width)
+                     TEXT_MAX_PX, TEXT_MIN_PX, TextShape, Tool, TwoPointShape, font_px_for_width, geometry,
+                     marker_width, set_geometry)
 from .toolbar import SHADOW, StylePopup, Toolbar
 
 DIM_ALPHA = 115          # непрозрачность затемнения (из 255) — примерно 45%
@@ -48,8 +49,9 @@ _HANDLE_CURSORS = {
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
 # Какие готовые фигуры можно двигать, тянуть и удалять (Del) при каком инструменте
-_EDITABLE = {Tool.SELECT: (RectShape, EllipseShape, ArrowShape, LineShape), Tool.RECT: (RectShape,),
-             Tool.ELLIPSE: (EllipseShape,), Tool.ARROW: (ArrowShape,), Tool.LINE: (LineShape,)}
+_EDITABLE = {Tool.SELECT: (RectShape, EllipseShape, ArrowShape, LineShape, TextShape), Tool.RECT: (RectShape,),
+             Tool.ELLIPSE: (EllipseShape,), Tool.ARROW: (ArrowShape,), Tool.LINE: (LineShape,),
+             Tool.TEXT: (TextShape,)}
 _LINEAR = (ArrowShape, LineShape)        # правятся за концы, а не за рамку
 HOVER_HINT_TEXT = "Del — удалить"
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW, Qt.Key.Key_L: Tool.LINE,
@@ -69,8 +71,18 @@ def _segment_distance(a: QPointF, b: QPointF, pt: QPointF) -> float:
     return QLineF(a + ab * t, pt).length()
 
 
-def _outline_distance(shape: TwoPointShape, pt: QPointF) -> float:
-    """Расстояние от точки до контура фигуры (у стрелки и линии — до отрезка)."""
+def _text_box(shape: TextShape) -> QRectF:
+    """Рамка текста, за которую его берут и у углов которой — точки размера."""
+    return shape.bounds_text().adjusted(-4, -2, 4, 2)
+
+
+def _outline_distance(shape, pt: QPointF) -> float:
+    """Расстояние от точки до контура фигуры (у стрелки и линии — до отрезка);
+    текст берётся за любое место внутри рамки."""
+    if isinstance(shape, TextShape):
+        r = _text_box(shape)
+        return math.hypot(max(r.left() - pt.x(), 0.0, pt.x() - r.right()),
+                          max(r.top() - pt.y(), 0.0, pt.y() - r.bottom()))
     if isinstance(shape, _LINEAR):
         return _segment_distance(shape.start, shape.end, pt)
     r = shape.rect()
@@ -155,9 +167,9 @@ class Overlay(QWidget):
         self._drag_from = QPointF()
         self._drag_offset = QPointF()
         # Перенос и изменение размера готового прямоугольника / овала
-        self._edit_shape: TwoPointShape | None = None
+        self._edit_shape: TwoPointShape | TextShape | None = None
         self._edit_handle = ""            # move или ручка: tl | t | tr | …
-        self._edit_from: tuple[QPointF, QPointF] = (QPointF(), QPointF())
+        self._edit_from: tuple = ()             # shapes.geometry() в начале перетаскивания
         self._hover_shape: TwoPointShape | None = None   # у неё видны ручки
         # Зажатый пробел во время выделения: рамка едет за мышью, размер не меняется
         self._space = False
@@ -358,11 +370,14 @@ class Overlay(QWidget):
             d = action.new_pos - action.old_pos
             r = r.united(r.translated(d)).united(r.translated(-d))
         elif action.kind == "geom":
-            shape, now = action.shape, (action.shape.start, action.shape.end)
+            shape, now = action.shape, geometry(action.shape)
             for geom in (action.old_geom, action.new_geom):
-                shape.start, shape.end = geom
+                set_geometry(shape, geom)
                 r = r.united(QRectF(self._shape_rect(shape)))
-            shape.start, shape.end = now
+            set_geometry(shape, now)
+        elif action.kind == "del":
+            for step, _old, _new in action.renumber:      # у этих шагов сменилась цифра
+                r = r.united(QRectF(self._shape_rect(step)))
         return r
 
     def _push_shape(self, shape: Shape) -> None:
@@ -472,8 +487,14 @@ class Overlay(QWidget):
     def _shape_handles(shape: TwoPointShape) -> list[tuple[str, QPointF]]:
         """Ручки фигуры. У стрелки и линии — два конца. У овала — только четыре точки на самом
         контуре (сверху, справа, снизу, слева): углы описанного квадрата висели бы в пустоте."""
+        if isinstance(shape, StepShape):              # номер шага тянут за сам кружок
+            return []
         if isinstance(shape, _LINEAR):
             return [("p1", QPointF(shape.start)), ("p2", QPointF(shape.end))]
+        if isinstance(shape, TextShape):              # у текста — четыре угла: размер шрифта
+            r = _text_box(shape)
+            return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height()))
+                    for hid, fx, fy in _HANDLES if len(hid) == 2]
         r = shape.rect()
         handles = _HANDLES if isinstance(shape, RectShape) else [h for h in _HANDLES if len(h[0]) == 1]
         return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in handles]
@@ -533,13 +554,21 @@ class Overlay(QWidget):
         return QRect(x, y, w, h)
 
     def _delete_hovered(self) -> bool:
-        """Del: удалить фигуру под курсором (Ctrl+Z вернёт)."""
+        """Del: удалить фигуру под курсором (Ctrl+Z вернёт). Если это номер шага, следующие
+        номера сдвигаются на один вниз — нумерация остаётся сплошной: 1, 2, 3…"""
         s = self._hover_shape
         if self._mode != "idle" or not self._has_shape(s):
             return False
         area = QRectF(self._shape_rect(s))
+        renumber = []
+        if isinstance(s, StepShape):
+            for x in self._history.shapes:
+                if isinstance(x, StepShape) and x is not s and x.number > s.number:
+                    renumber.append((x, x.number, x.number - 1))
+                    x.number -= 1
+                    area = area.united(QRectF(self._shape_rect(x)))
         self._set_hover_shape(None)
-        self._history.remove(s)
+        self._history.remove(s, renumber)
         self._invalidate_layer(area)
         self._sync_toolbar()
         self._update_cursor(self._mouse)
@@ -594,6 +623,7 @@ class Overlay(QWidget):
             self.toolbar.hide()
         elif step:
             # взяли нумерованный шаг — тащим его; слой собирается без него
+            self._hide_hover_hint()
             self._mode, self._drag_step = "dragging", step
             self._drag_from = QPointF(step.pos)
             self._drag_offset = step.pos - QPointF(e.position())
@@ -603,7 +633,7 @@ class Overlay(QWidget):
             # взяли прямоугольник / овал за контур (перенос) или за ручку (размер)
             shape, hid = edit
             self._mode, self._edit_shape, self._edit_handle = "editing", shape, hid
-            self._edit_from = (QPointF(shape.start), QPointF(shape.end))
+            self._edit_from = geometry(shape)
             self._set_hover_shape(shape)
             self._invalidate_layer(QRectF(self._shape_rect(shape)))
             self._hide_hover_hint()
@@ -669,7 +699,8 @@ class Overlay(QWidget):
             return
         else:
             edit = self._editable_at(pos) if self._mode == "idle" else None
-            self._set_hover_shape(edit[0] if edit else None)
+            # под курсором фигура или номер шага — их можно удалить по Del
+            self._set_hover_shape(edit[0] if edit else self._step_at(pos) if self._mode == "idle" else None)
             self._update_cursor(pos)
             self._update_hover(old_mouse)
             return
@@ -709,9 +740,9 @@ class Overlay(QWidget):
             self._invalidate_layer(area)             # шаг возвращается в слой на новом месте
         elif mode == "editing" and self._edit_shape:
             shape, self._edit_shape = self._edit_shape, None
-            new = (QPointF(shape.start), QPointF(shape.end))
-            if shape.is_empty():                     # стянули в точку — возвращаем как было
-                shape.start, shape.end = QPointF(self._edit_from[0]), QPointF(self._edit_from[1])
+            new = geometry(shape)
+            if not isinstance(shape, TextShape) and shape.is_empty():   # стянули в точку — как было
+                set_geometry(shape, self._edit_from)
             elif new != self._edit_from:
                 self._history.push_geom(shape, self._edit_from, new)
                 self._sync_toolbar()
@@ -791,8 +822,11 @@ class Overlay(QWidget):
     def _edit_geometry(self, pos: QPointF, shift: bool = False) -> None:
         """Перенос (за контур) или изменение размера (за ручку): у рамки и овала — стороны
         и углы, у стрелки и линии — концы (с Shift — под 45°, как при рисовании)."""
-        shape, (a, b) = self._edit_shape, self._edit_from
         d = pos - QPointF(self._press)
+        if isinstance(self._edit_shape, TextShape):
+            self._edit_text(d)
+            return
+        shape, (a, b) = self._edit_shape, self._edit_from
         if self._edit_handle == "move":
             shape.start, shape.end = a + d, b + d
             return
@@ -819,6 +853,23 @@ class Overlay(QWidget):
             bottom += d.y()
         r = QRectF(QPointF(left, top), QPointF(right, bottom)).normalized()
         shape.start, shape.end = r.topLeft(), r.bottomRight()
+
+    def _edit_text(self, d: QPointF) -> None:
+        """Текст: за рамку — перенос, за угол — размер шрифта (противоположный угол на месте)."""
+        shape, h = self._edit_shape, self._edit_handle
+        pos0, size0 = self._edit_from
+        if h == "move":
+            shape.pos = pos0 + d
+            return
+        set_geometry(shape, self._edit_from)
+        box0 = shape.bounds_text()
+        sx, sy = (1 if "r" in h else -1), (1 if "b" in h else -1)
+        k = max((box0.width() + sx * d.x()) / max(box0.width(), 1.0),
+                (box0.height() + sy * d.y()) / max(box0.height(), 1.0))
+        shape.size = round(min(TEXT_MAX_PX, max(TEXT_MIN_PX, size0 * k)))
+        box = shape.bounds_text()
+        shape.pos = QPointF(box0.right() - box.width() if "l" in h else box0.left(),
+                            box0.bottom() - box.height() if "t" in h else box0.top())
 
     @staticmethod
     def _constrain_square(a, b):
@@ -1158,13 +1209,19 @@ class Overlay(QWidget):
         """Аккуратные круглые ручки у прямоугольника / овала под курсором: белое кольцо
         с серединкой цвета самой фигуры и мягкой тенью — видно, к какой фигуре они относятся."""
         s = self._hover_shape
-        if self._mode not in ("idle", "editing") or not self._has_shape(s):
+        if self._mode not in ("idle", "editing") or not self._has_shape(s) or isinstance(s, StepShape):
             return
         r = SHAPE_HANDLE_R
         color = QColor(s.color)
         color.setAlpha(255)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if isinstance(s, TextShape):                   # у текста видна рамка, за которую его берут
+            pen = QPen(color, 1, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(_text_box(s))
         for _hid, pt in self._shape_handles(s):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 0, 0, 70))

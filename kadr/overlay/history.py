@@ -10,11 +10,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF
 
-from .shapes import Shape
-
-
-def _copy(geom: tuple[QPointF, QPointF]) -> tuple[QPointF, QPointF]:
-    return QPointF(geom[0]), QPointF(geom[1])
+from .shapes import Shape, set_geometry
 
 
 @dataclass
@@ -23,9 +19,10 @@ class Action:
     kind: str = "add"                  # add | del | move | geom
     old_pos: QPointF | None = None     # move: откуда и куда
     new_pos: QPointF | None = None
-    old_geom: tuple[QPointF, QPointF] | None = None   # geom: (start, end) до и после
-    new_geom: tuple[QPointF, QPointF] | None = None
+    old_geom: tuple | None = None      # geom: положение и размер до и после (см. shapes.geometry)
+    new_geom: tuple | None = None
     index: int = -1                    # del: где фигура стояла (порядок рисования)
+    renumber: list | None = None       # del шага: [(шаг, номер до, номер после)] — номера после него
 
 
 class History:
@@ -46,19 +43,20 @@ class History:
         """Фигура уже передвинута — только запоминаем, чтобы можно было отменить."""
         self._record(Action(shape, "move", QPointF(old_pos), QPointF(new_pos)))
 
-    def remove(self, shape: Shape) -> None:
-        """Удалить фигуру (Del); Ctrl+Z вернёт её на прежнее место в порядке рисования."""
+    def remove(self, shape: Shape, renumber: list | None = None) -> None:
+        """Удалить фигуру (Del); Ctrl+Z вернёт её на прежнее место в порядке рисования.
+        renumber — шаги, которым уже сдвинули номер: отмена вернёт им прежние."""
         idx = self._index(shape)
         del self._shapes[idx]
-        self._record(Action(shape, "del", index=idx))
+        self._record(Action(shape, "del", index=idx, renumber=renumber or []))
 
     def _index(self, shape: Shape) -> int:
         # по идентичности, а не ==: две одинаковые фигуры (dataclass) равны
         return next(i for i in range(len(self._shapes) - 1, -1, -1) if self._shapes[i] is shape)
 
-    def push_geom(self, shape: Shape, old: tuple[QPointF, QPointF], new: tuple[QPointF, QPointF]) -> None:
-        """Прямоугольник или овал уже передвинут / растянут — запоминаем для отмены."""
-        self._record(Action(shape, "geom", old_geom=_copy(old), new_geom=_copy(new)))
+    def push_geom(self, shape: Shape, old: tuple, new: tuple) -> None:
+        """Фигура уже передвинута / растянута — запоминаем для отмены (кортежи из shapes.geometry)."""
+        self._record(Action(shape, "geom", old_geom=old, new_geom=new))
 
     def _record(self, action: Action) -> None:
         self._done.append(action)
@@ -71,9 +69,11 @@ class History:
         if a.kind == "move":
             a.shape.pos = QPointF(a.old_pos)
         elif a.kind == "geom":
-            a.shape.start, a.shape.end = _copy(a.old_geom)
+            set_geometry(a.shape, a.old_geom)
         elif a.kind == "del":
             self._shapes.insert(a.index, a.shape)
+            for step, old, _new in a.renumber:
+                step.number = old
         else:
             del self._shapes[self._index(a.shape)]
         self._undone.append(a)
@@ -86,9 +86,11 @@ class History:
         if a.kind == "move":
             a.shape.pos = QPointF(a.new_pos)
         elif a.kind == "geom":
-            a.shape.start, a.shape.end = _copy(a.new_geom)
+            set_geometry(a.shape, a.new_geom)
         elif a.kind == "del":
             del self._shapes[self._index(a.shape)]
+            for step, _old, new in a.renumber:
+                step.number = new
         else:
             self._shapes.append(a.shape)
         self._done.append(a)
