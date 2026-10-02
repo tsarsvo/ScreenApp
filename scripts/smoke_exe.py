@@ -70,10 +70,13 @@ def main() -> None:
         "replay_system_audio": True,   # на сервере может не быть звука — проверяем, что это не ломает запись
     }), encoding="utf-8")
     env = dict(os.environ, APPDATA=str(appdata), KADR_HANG_DUMP=str(work / "hang"))
-    replay_dir = Path(tempfile.gettempdir()) / "kadr-replay"
-
     print(f"Запуск {exe}")
     app = subprocess.Popen([str(exe)], env=env)
+    tmp = Path(tempfile.gettempdir())
+
+    def segments():
+        # у каждой копии Kadr своя папка записи kadr-replay-<pid>
+        return [p for p in tmp.glob("kadr-replay-*/seg_*.ts") if p.stat().st_size > 0]
     try:
         time.sleep(4)
         if app.poll() is not None:
@@ -86,10 +89,11 @@ def main() -> None:
         print(f"    {shot.name}: {shot.stat().st_size // 1024} КБ")
 
         wait_for("запись повтора пишет сегменты",
-                 lambda: len([p for p in replay_dir.glob("seg_*.ts") if p.stat().st_size > 0]) >= 2, 120)
+                 lambda: len(segments()) >= 2, 120)
         probe = appdata / "Kadr" / "ffmpeg-probe.json"
         if probe.exists():
             print(f"    кодеры: {probe.read_text(encoding='utf-8')}")
+        replay_dir = segments()[0].parent
         log = replay_dir / "ffmpeg.log"
         if log.exists() and log.read_text(encoding="utf-8", errors="replace").strip():
             print(f"    ffmpeg.log: {log.read_text(encoding='utf-8', errors='replace')[-500:]}")
