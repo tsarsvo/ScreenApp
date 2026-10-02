@@ -1046,14 +1046,17 @@ def test_windows_mouse_hook_fires_on_side_button():
                     ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
 
     class INPUT(ctypes.Structure):
-        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT), ("_pad", ctypes.c_byte * 8)]
+        # MOUSEINPUT — самый большой вариант union, поэтому INPUT = type + MOUSEINPUT (40 байт на x64)
+        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
 
     def send(flags):
         inp = INPUT(0, MOUSEINPUT(0, 0, 2, flags, 0, 0))                # XBUTTON2 = «вперёд»
-        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        return ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
     try:
-        send(0x0080)                                                      # MOUSEEVENTF_XDOWN
+        sent = send(0x0080)                                               # MOUSEEVENTF_XDOWN
+        if sent != 1:
+            pytest.skip(f"Windows не принимает имитацию ввода в этом окружении (код {ctypes.GetLastError()})")
         send(0x0100)                                                      # MOUSEEVENTF_XUP
         deadline = time.time() + 5
         while not fired and time.time() < deadline:
