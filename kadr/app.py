@@ -356,8 +356,14 @@ class KadrApp(QObject):
 
     def pin_image(self, img: QImage, top_left: QPoint | None = None, dpr: float = 1.0) -> None:
         """Закрепить снимок поверх всех окон."""
+        if img.isNull():
+            self.notify("Снимок не найден — возможно, он уже удалён из истории", error=True)
+            return
         if top_left is None:
             top_left = QCursor.pos() - QPoint(40, 40)
+            # снимок из истории — в физических пикселях: показываем в натуральную величину
+            screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() if screen else 1.0
         pin = PinWindow(img, dpr, top_left, self.theme.tokens.accent, self.store.data.palette[:3])
         pin.copy_requested.connect(self._copy)
         pin.save_requested.connect(self._save)
@@ -385,7 +391,11 @@ class KadrApp(QObject):
         m.addAction("Очистить историю", self.history.clear)
 
     def _copy_from_history(self, path) -> None:
-        copy_to_clipboard(QImage(str(path)))
+        img = QImage(str(path))
+        if img.isNull():
+            self.notify("Снимок не найден — возможно, он уже удалён из истории", error=True)
+            return
+        copy_to_clipboard(img)
         self.notify("Скопировано в буфер обмена")
 
     def _on_saved(self, path) -> None:

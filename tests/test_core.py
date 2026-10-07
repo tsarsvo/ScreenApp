@@ -1158,3 +1158,61 @@ def test_deleting_a_step_renumbers_the_following_ones(qapp):
     o._invalidate_layer()
     assert _max_channel_diff(part, o._ensure_layer().toImage()) <= 2
     o.close()
+
+
+def test_keys_ignored_while_mouse_drags_shape(qapp):
+    """Ctrl+Z / Ctrl+A посреди переноса фигуры не ломают историю: фигура не теряется."""
+    from PySide6.QtCore import QPointF
+
+    from kadr.overlay.shapes import Tool
+
+    L, N, C = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ControlModifier
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (400, 400))
+    o.set_tool(Tool.RECT)
+    _drag(o, (150, 150), (250, 250))
+    o.set_tool(Tool.SELECT)
+    QTest.mouseMove(o, QPoint(175, 150))         # контур, не ручка — перенос
+    QTest.mousePress(o, L, N, QPoint(175, 150))
+    QTest.mouseMove(o, QPoint(195, 170))
+    QTest.keyClick(o, Qt.Key.Key_Z, C)
+    QTest.keyClick(o, Qt.Key.Key_A, C)
+    QTest.mouseRelease(o, L, N, QPoint(195, 170))
+    assert len(o._history.shapes) == 1 and o._edit_shape is None
+    assert o._history.shapes[0].start == QPointF(170, 170)
+    QTest.keyClick(o, Qt.Key.Key_Z, C)            # после отпускания Ctrl+Z отменяет перенос
+    assert len(o._history.shapes) == 1 and o._history.shapes[0].start == QPointF(150, 150)
+    o.close()
+
+
+def test_step_cannot_be_dragged_out_of_selection_while_placing(qapp):
+    from kadr.overlay.shapes import Tool
+
+    L, N = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (300, 300))
+    o.set_tool(Tool.STEP)
+    QTest.mousePress(o, L, N, QPoint(200, 200))
+    QTest.mouseMove(o, QPoint(500, 50))
+    QTest.mouseRelease(o, L, N, QPoint(500, 50))
+    step = o._history.shapes[0]
+    assert o._sel.contains(step.pos.toPoint())
+    o.close()
+
+
+def test_pin_ignores_horizontal_wheel(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    from kadr.pin import PinWindow
+
+    img = QImage(200, 100, QImage.Format.Format_RGB32)
+    img.fill(QColor("#3F6BFF"))
+    w = PinWindow(img, 1.0, QPoint(100, 100))
+    w.show()
+    size = w.size()
+    ev = QWheelEvent(QPointF(50, 50), QPointF(w.mapToGlobal(QPoint(50, 50))), QPoint(), QPoint(120, 0),
+                     Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    qapp.sendEvent(w, ev)
+    assert w.size() == size
+    w.close()
