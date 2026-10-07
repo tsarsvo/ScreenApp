@@ -382,7 +382,10 @@ class PinWindow(QWidget):
         self.close()
 
     def wheelEvent(self, e) -> None:
-        step = 1 if e.angleDelta().y() > 0 else -1
+        dy = e.angleDelta().y()
+        if not dy:
+            return          # горизонтальная прокрутка тачпада — раньше она уменьшала снимок
+        step = 1 if dy > 0 else -1
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.setWindowOpacity(min(1.0, max(0.2, self.windowOpacity() + 0.1 * step)))
         elif self._loupe:

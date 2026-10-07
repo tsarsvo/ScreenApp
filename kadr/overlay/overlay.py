@@ -1034,7 +1034,9 @@ class Overlay(QWidget):
             if QLineF(cur.points[-1], pos).length() >= 1.0:
                 cur.points.append(pos)
         elif isinstance(cur, StepShape):
-            cur.pos = pos                                # номер можно перетащить, пока кнопка зажата
+            # номер можно перетащить, пока кнопка зажата — но не за рамку, иначе его не будет в файле
+            s = self._sel
+            cur.pos = QPointF(min(max(pos.x(), s.left()), s.right()), min(max(pos.y(), s.top()), s.bottom()))
         elif isinstance(cur, TwoPointShape):
             if shift and isinstance(cur, (ArrowShape, LineShape)):
                 # Shift: стрелка и линия с шагом 45°
@@ -1078,6 +1080,12 @@ class Overlay(QWidget):
 
         if e.key() == Qt.Key.Key_Space and self._mode == "selecting":
             self._space = True          # держим пробел — рамка выделения двигается за мышью
+            return
+        if self._mode != "idle" and e.key() != Qt.Key.Key_Escape:
+            # Кнопка мыши ещё зажата (фигуру тянут, рисуют, двигают рамку) — Ctrl+Z, Ctrl+A,
+            # смена инструмента и т.п. ждут отпускания. Иначе Ctrl+Z посреди переноса
+            # убирал фигуру, а отпускание мыши записывало её перенос в историю: фигура
+            # пропадала совсем, и Ctrl+Y её уже не возвращал.
             return
         if self._picking:
             if e.key() == Qt.Key.Key_Escape:
@@ -1130,7 +1138,9 @@ class Overlay(QWidget):
         elif e.key() == Qt.Key.Key_Backspace:
             ed.text = ed.text[:-1]
         elif e.matches(QKeySequence.StandardKey.Paste):
-            ed.text += QGuiApplication.clipboard().text()
+            # из буфера Windows приходят \r\n и табуляции — на снимке они рисовались бы квадратиками
+            pasted = QGuiApplication.clipboard().text().replace("\r\n", "\n").replace("\r", "\n")
+            ed.text += pasted.replace("\t", "    ")
         elif ctrl:
             return False  # Ctrl+Z и т.п. обрабатываются как обычно
         elif e.text() and e.text().isprintable():
