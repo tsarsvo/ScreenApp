@@ -152,6 +152,23 @@ def test_overlay_move_resize_and_click_fullscreen(qapp):
     o.close()
 
 
+def test_selection_up_left_and_resize_past_opposite_edge(qapp):
+    """Выделение влево-вверх не теряет пиксели; ручка, протянутая за противоположную
+    сторону, не сдвигает эту сторону и рамка не пропадает."""
+    o = _overlay(qapp)
+    _drag(o, (300, 250), (100, 100))
+    assert o._sel == QRect(QPoint(100, 100), QPoint(300, 250))
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 175))
+    for x in (101, 100, 99, 98):
+        QTest.mouseMove(o, QPoint(x, 175))
+        assert not o._sel.isEmpty()
+        assert (o._sel.left(), o._sel.right()) == (min(x, 100), max(x, 100))
+    QTest.mouseMove(o, QPoint(50, 175))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(50, 175))
+    assert o._sel == QRect(QPoint(50, 100), QPoint(100, 250))
+    o.close()
+
+
 def test_toolbar_goes_above_when_no_room_below(qapp):
     o = _overlay(qapp)
     _drag(o, (100, 300), (500, 590))

@@ -100,6 +100,15 @@ def _outline_distance(shape, pt: QPointF) -> float:
     return min(pt.x() - r.left(), r.right() - pt.x(), pt.y() - r.top(), r.bottom() - pt.y())
 
 
+def _rect_between(a: QPoint, b: QPoint) -> QRect:
+    """Рамка, у которой a и b — противоположные углы (оба пикселя входят в неё).
+    QRect(a, b).normalized() для этого не годится: когда b левее или выше a, Qt сдвигает
+    угол a на пиксель внутрь и рамка теряет по пикселю с каждой стороны. Из-за этого при
+    выделении влево-вверх снимок был на 2 px меньше, а при протягивании ручки за
+    противоположную сторону рамка на миг пропадала и «прыгала» на пиксель."""
+    return QRect(QPoint(min(a.x(), b.x()), min(a.y(), b.y())), QPoint(max(a.x(), b.x()), max(a.y(), b.y())))
+
+
 def _is_key(event: QKeyEvent, key: Qt.Key) -> bool:
     """Сравнение клавиши, устойчивое к раскладке (Ctrl+Я на русской = Ctrl+Z)."""
     if event.key() == key:
@@ -620,6 +629,7 @@ class Overlay(QWidget):
         edit = None if handle or step else self._editable_at(pos)
         if handle:
             self._mode, self._handle, self._sel_origin = "resizing", handle, QRect(self._sel)
+            self._set_hover_shape(None)      # ручки фигуры под курсором не должны висеть при растягивании
             self.toolbar.hide()
         elif step:
             # взяли нумерованный шаг — тащим его; слой собирается без него
@@ -646,6 +656,7 @@ class Overlay(QWidget):
             self._start_drawing(QPointF(e.position()))
         elif self._sel is not None and self._sel.contains(pos):
             self._mode, self._sel_origin = "moving", QRect(self._sel)
+            self._set_hover_shape(None)
             self.toolbar.hide()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         elif self._sel is None or (self._tool == Tool.SELECT and not self._history):
@@ -670,7 +681,7 @@ class Overlay(QWidget):
             if self._space:
                 self._press += pos - old_mouse     # пробел: рамка едет целиком
             end = self._constrain_square(self._press, pos) if shift else pos
-            self._sel = QRect(self._press, end).normalized().intersected(bounds)
+            self._sel = _rect_between(self._press, end).intersected(bounds)
         elif self._mode == "moving":
             r = self._sel_origin.translated(pos - self._press)
             r.moveLeft(max(0, min(r.left(), bounds.width() - r.width())))
@@ -817,7 +828,7 @@ class Overlay(QWidget):
             top += d.y()
         if "b" in h:
             bottom += d.y()
-        return QRect(QPoint(left, top), QPoint(right, bottom)).normalized()
+        return _rect_between(QPoint(left, top), QPoint(right, bottom))
 
     def _edit_geometry(self, pos: QPointF, shift: bool = False) -> None:
         """Перенос (за контур) или изменение размера (за ручку): у рамки и овала — стороны
