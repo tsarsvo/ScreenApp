@@ -4,12 +4,16 @@
 
 # Kadr
 
+**Screenshots and screen recording — fast, clean, no clutter.**
 **Скриншоты и повтор экрана — быстро, красиво, без лишнего.**
-<br>Минималистичный аналог Lightshot с рисованием, undo/redo и записью последних минут экрана.
 
 <br>
 
-<!-- Номер версии прописывает сборка релиза (scripts/bump_readme.py) — вручную не трогать -->
+A minimal Lightshot-style tool: annotate, undo/redo, and save the last minutes of your screen.
+<br>Минималистичный аналог Lightshot: рисование, undo/redo и запись последних минут экрана.
+
+<br>
+
 <a href="https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe">
   <img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%B4%D0%BB%D1%8F%20Windows-v1.2.13-3F6BFF?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать для Windows (kadr-version)" height="42">
 </a>
@@ -29,101 +33,67 @@
 
 <br><br>
 
-<img src="docs/overlay-light.png" width="49%" alt="Выделение и рисование — светлая тема">
-<img src="docs/overlay-dark.png" width="49%" alt="Выделение и рисование — тёмная тема">
-
-</div>
-
----
-
-## ✨ Возможности
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 📸 Скриншоты
-- **Весь экран одной клавишей**: файл сразу сохраняется в папку, без лишних окон
-- **Выделение области** с плавным затемнением фона, ручками размера и размером в пикселях
-- **Несколько мониторов** с разным масштабом (100% и 200% одновременно)
-- Результат **копируется в буфер** или **сохраняется** в PNG / JPG / WEBP — с понятными именами `Screenshot_1`, `Screenshot_2`… (повторы — `Video_1.mp4`, `Video_2.mp4`…)
-
-</td>
-<td width="50%" valign="top">
-
-### 🖌 Рисование
-- Кисть, стрелка, **прямая линия**, прямоугольник, овал, **текст**
-- **Маркер**, **нумерованные шаги** ①②③ (их можно перетаскивать за кружок) и **пикселизация**, чтобы скрыть пароли и личные данные
-- Линию, стрелку или фигуру можно **начать за рамкой**: часть за рамкой видна полупрозрачной, в снимок попадает только то, что внутри
-- **Любой цвет**: палитра, выбор оттенка, HEX и **пипетка** прямо со скриншота
-- **Свои цвета палитры**: правый клик по кружку, всё сохраняется
-- Толщина — слайдером или **Ctrl + колесо**
-- **Shift** — ровный квадрат, круг, стрелка и линия под 45°
-- **Undo / Redo** — кнопками или `Ctrl+Z` / `Ctrl+Y`
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### ⏪ Повтор экрана
-- Экран и звук пишутся в фоне, по `Alt+Shift+R` сохраняются **последние 1–5 минут** в `.mp4`
-- Звук системы и **микрофон по выбору**
-- Кодирование **видеокартой**: NVIDIA, AMD, Intel
-- Сохранение за 1–2 секунды, на диске не больше нужных минут
-
-</td>
-<td width="50%" valign="top">
-
-### ⚙️ Удобство
-- Живёт в **трее**, клик по значку открывает настройки
-- **Недавние снимки** в меню значка: скопировать заново, открыть или закрепить
-- **Закрепить снимок поверх окон** (<kbd>Ctrl</kbd>+<kbd>T</kbd>): перетаскивание, размер — за край или колесом, прозрачность, **рисование прямо на снимке** и копирование в один клик
-- **Автообновление**: новая версия ставится в один клик, с проверкой контрольной суммы; [история изменений](CHANGELOG.md)
-- **Светлая и тёмная** тема, по умолчанию как в системе
-- **Автозапуск** при входе в систему
-- Горячие клавиши — **любая клавиша или сочетание**
-- **Удаление в один клик** из настроек, с подтверждением
-
-</td>
-</tr>
-</table>
-
-<div align="center">
-<img src="docs/tools.png" width="80%" alt="Маркер, пикселизация и нумерованные шаги">
-<br><sub>Маркер, нумерованные шаги и пикселизация, чтобы скрыть пароль</sub>
-<br><br>
-<img src="docs/picker.png" width="49%" alt="Выбор любого цвета">
-<img src="docs/pipette.png" width="49%" alt="Пипетка с лупой">
-<br><sub>Выбор любого цвета и пипетка с лупой: наведите на нужный пиксель и кликните</sub>
-<br><br>
-<img src="docs/settings-light.png" width="38%" alt="Настройки — светлая тема">
-&nbsp;&nbsp;
-<img src="docs/settings-dark.png" width="38%" alt="Настройки — тёмная тема">
-</div>
-
----
-
-## 🚀 Установка
-
-1. Скачайте **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)**.
-2. Запустите его. Права администратора не нужны.
-3. Готово: ярлык **Kadr** появится на рабочем столе и в меню «Пуск», значок — в трее возле часов.
-
-> [!TIP]
-> Не хотите устанавливать? В [релизе](https://github.com/tsarsvo/ScreenApp/releases/latest) есть **`Kadr-portable.zip`**: распакуйте его и запустите `Kadr.exe`.
-
-> [!NOTE]
-> Windows SmartScreen может предупредить о «неизвестном издателе», потому что программа не подписана платным сертификатом. Нажмите **«Подробнее» → «Выполнить в любом случае»**.
-
-<details>
-<summary><b>Установка из исходников (для разработчиков)</b></summary>
+<img src="docs/overlay-light.png" width="49%" alt="Selection and drawing, light theme · Выделение и рисование — светлая тема">
+<img src="docs/overlay-dark.png" width="49%" alt="Selection and drawing, dark theme · Выделение и рисование — тёмная тема">
 
 <br>
 
-**Windows, двойным кликом.** Установите [Python 3.10+](https://www.python.org/downloads/) с галочкой *Add python.exe to PATH*. Скачайте репозиторий (**Code → Download ZIP**), распакуйте и дважды кликните **`install_windows.bat`**. Скрипт сам поставит зависимости, скачает FFmpeg, создаст ярлыки и запустит программу.
+**🇬🇧 English** · **🇷🇺 Русский** — each section shows both languages · у каждого раздела оба языка
 
-**Вручную, на любой ОС:**
+</div>
+
+---
+
+## ✨ Features · Возможности
+
+| Area | English | Русский |
+|:--|:--|:--|
+| 📸 **Screenshots** | One key for the whole screen, saved straight to a folder. Select an area with a smooth dimmed background, handles and a pixel size label. Works with several monitors at different scales. Copy to clipboard or save as PNG / JPG / WEBP. | Весь экран одной клавишей — файл сразу в папку. Выделение области с затемнением фона, ручками и размером в пикселях. Несколько мониторов с разным масштабом. Копирование в буфер или сохранение в PNG / JPG / WEBP. |
+| 🖌 **Annotation** | Pen, arrow, line, rectangle, ellipse, text, marker, numbered steps ①②③, and pixelation to hide passwords. Move and resize shapes, delete with `Del`, undo/redo with `Ctrl+Z` / `Ctrl+Y`. | Кисть, стрелка, линия, прямоугольник, овал, текст, маркер, нумерованные шаги ①②③ и пикселизация для скрытия паролей. Фигуры переносятся, меняют размер и удаляются по `Del`; `Ctrl+Z` / `Ctrl+Y`. |
+| 🎨 **Colours** | Any colour: palette, colour wheel, HEX and an eyedropper that picks from the screenshot. Your own palette colours are saved. | Любой цвет: палитра, выбор оттенка, HEX и пипетка прямо со скриншота. Свои цвета палитры сохраняются. |
+| 😀 **Emoji** | Discord-style picker with search in English and Russian (`J`), recently used emoji, and categories. | Панель эмодзи как в Discord (`J`): поиск по-русски и по-английски, недавние и категории. |
+| ⏪ **Screen replay** | Records screen and sound in the background; `Alt+Shift+R` saves the last 1–5 minutes as `.mp4`. System sound and a microphone of your choice. Hardware encoding on NVIDIA, AMD and Intel. | Экран и звук пишутся в фоне; `Alt+Shift+R` сохраняет последние 1–5 минут в `.mp4`. Звук системы и микрофон по выбору. Кодирование видеокартой: NVIDIA, AMD, Intel. |
+| 📌 **Pin** | Pin a screenshot on top of other windows (`Ctrl+T`): drag, resize, change opacity, draw on it, magnifier. | Закрепить снимок поверх окон (`Ctrl+T`): перетаскивание, размер, прозрачность, рисование и лупа. |
+| ⚙️ **Convenience** | Lives in the tray, recent screenshots in its menu, auto-update with checksum check, light and dark themes, autostart, any key or combination as a hotkey, one-click uninstall. | В трее, недавние снимки в меню значка, автообновление с проверкой контрольной суммы, светлая и тёмная тема, автозапуск, любая клавиша как хоткей, удаление в один клик. |
+
+<div align="center">
+<img src="docs/tools.png" width="80%" alt="Marker, pixelation and numbered steps · Маркер, пикселизация и нумерованные шаги">
+<br><sub>Marker, numbered steps and pixelation to hide a password · Маркер, нумерованные шаги и пикселизация, чтобы скрыть пароль</sub>
+<br><br>
+<img src="docs/picker.png" width="49%" alt="Any colour picker · Выбор любого цвета">
+<img src="docs/pipette.png" width="49%" alt="Eyedropper with magnifier · Пипетка с лупой">
+<br><sub>Any colour and the eyedropper: point at a pixel and click · Любой цвет и пипетка: наведите на пиксель и кликните</sub>
+<br><br>
+<img src="docs/settings-light.png" width="38%" alt="Settings, light theme · Настройки — светлая тема">
+&nbsp;&nbsp;
+<img src="docs/settings-dark.png" width="38%" alt="Settings, dark theme · Настройки — тёмная тема">
+</div>
+
+---
+
+## 🚀 Install · Установка
+
+| English | Русский |
+|:--|:--|
+| 1. Download **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)**. <br>2. Run it. No administrator rights needed. <br>3. Done: the **Kadr** shortcut appears on the desktop and in the Start menu, and the icon in the tray. | 1. Скачайте **[Kadr-Setup.exe](https://github.com/tsarsvo/ScreenApp/releases/latest/download/Kadr-Setup.exe)**. <br>2. Запустите его. Права администратора не нужны. <br>3. Готово: ярлык **Kadr** появится на рабочем столе и в «Пуск», значок — в трее. |
+
+> [!TIP]
+> **English:** prefer no installer? Take **`Kadr-portable.zip`** from the [release page](https://github.com/tsarsvo/ScreenApp/releases/latest), unzip it and run `Kadr.exe`.
+> **Русский:** не хотите устанавливать? В [релизе](https://github.com/tsarsvo/ScreenApp/releases/latest) есть **`Kadr-portable.zip`**: распакуйте и запустите `Kadr.exe`.
+
+> [!NOTE]
+> **English:** Windows SmartScreen may warn about an "unknown publisher" because the app is not signed with a paid certificate. Click **More info → Run anyway**.
+> **Русский:** SmartScreen может предупредить о «неизвестном издателе» — программа не подписана платным сертификатом. Нажмите **«Подробнее» → «Выполнить в любом случае»**.
+
+<details>
+<summary><b>Running from source · Установка из исходников (для разработчиков)</b></summary>
+
+<br>
+
+**Windows, double-click · двойным кликом.** Install [Python 3.10+](https://www.python.org/downloads/) with *Add python.exe to PATH* ticked. Download the repository (**Code → Download ZIP**), unzip it and double-click **`install_windows.bat`**. It installs dependencies, downloads FFmpeg, creates shortcuts and starts the app.
+<br>Установите [Python 3.10+](https://www.python.org/downloads/) с галочкой *Add python.exe to PATH*, скачайте репозиторий, распакуйте и дважды кликните **`install_windows.bat`**.
+
+**Manually, any OS · вручную, любая ОС:**
 
 ```bash
 git clone https://github.com/tsarsvo/ScreenApp.git && cd ScreenApp
@@ -138,7 +108,10 @@ python main.py            # --region | --full | --settings | --save-replay
 
 ---
 
-## ⌨️ Горячие клавиши
+## ⌨️ Hotkeys · Горячие клавиши
+
+> English: all three global hotkeys can be changed in Settings. Press the button, then any key or combination (single keys work too). <kbd>Backspace</kbd> disables one.
+> Русский: все три сочетания меняются в настройках (см. ниже).
 
 | Действие | Windows / Linux | macOS |
 |:--|:--:|:--:|
@@ -194,7 +167,9 @@ python main.py            # --region | --full | --settings | --save-replay
 
 ---
 
-## ⏪ Как работает повтор экрана
+## ⏪ How screen replay works · Как работает повтор экрана
+
+> **English:** turn on **"Record replay"** in Settings (off by default). While recording, a red dot shows on the tray icon. Kadr keeps only the last few minutes in a temporary ring buffer and writes them to `.mp4` on `Alt+Shift+R`, without re-encoding, in 1–2 seconds.
 
 Включите тумблер **«Записывать повтор»** в настройках (по умолчанию он выключен). Пока запись идёт, на значке в трее горит красная точка.
 
@@ -211,7 +186,10 @@ python main.py            # --region | --full | --settings | --save-replay
 
 ---
 
-## 🛠 Для разработчиков
+## 🛠 Development · Для разработчиков
+
+> **English:** Python 3.10+, PySide6 (Qt 6), FFmpeg for replay, PyInstaller + Inno Setup for the Windows build. Tests: `QT_QPA_PLATFORM=offscreen python -m pytest -q`. Lint: `ruff check .`. Release notes live in [CHANGELOG.md](CHANGELOG.md).
+> **Русский:** подробности ниже.
 
 <details>
 <summary><b>Стек и почему именно он</b></summary>
