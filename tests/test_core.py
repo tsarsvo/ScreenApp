@@ -1469,3 +1469,32 @@ def test_emoji_resizes_smoothly_with_fractional_size(qapp):
     pix = sh._emoji_pixmap("🔥")
     assert sh._emoji_pixmap("🔥") is pix                        # растр один и тот же, без пересборки
     o.close()
+
+
+def test_emoji_popup_reopens_after_search_and_pick(qapp):
+    """Баг: после поиска QScrollArea.setWidget удалял список категорий, и при следующем открытии
+    панель не могла выбрать эмодзи. Теперь список жив и показывается снова."""
+    from kadr.overlay import emoji_data
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp, 800, 600)
+    _drag(o, (100, 100), (500, 400))
+    for _ in range(3):
+        o.set_tool(Tool.EMOJI)
+        pop = o.emoji_popup
+        assert pop.isVisible()
+        pop.search.setText("огонь")
+        pop.choose("🔥")
+        assert not pop.isVisible()
+    o.set_tool(Tool.EMOJI)
+    pop = o.emoji_popup
+    assert pop.scroll.widget() is pop._view and pop._browse.isVisible()
+    pop.search.clear()
+    assert pop._browse.isVisible()
+    pop.choose("👍")
+    assert o._emoji == "👍"
+    assert emoji_data.search("kiss")                                  # английские названия из Unicode
+    assert [name for name, _icon, _items in emoji_data.CATEGORIES] == [
+        "Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Activities",
+        "Travel & Places", "Objects", "Symbols", "Flags"]
+    o.close()
