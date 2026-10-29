@@ -7,12 +7,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPixmap, QPolygonF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from kadr.hotkeys import Hotkey
+from kadr.overlay.overlay import HANDLE_HIT
 
 
 @pytest.fixture(scope="session")
@@ -551,16 +552,19 @@ def test_guides_do_not_stay_behind(qapp):
     o.close()
 
 
-def test_handle_cursor_under_toolbar_shadow(qapp):
+def test_toolbar_never_covers_selection_handles(qapp):
+    """Панель (вместе с прозрачным полем тени) не должна перекрывать ручки рамки: иначе нижние
+    точки размера попадают в панель, и они перестают работать. Проверяем обе стороны рамки."""
     from PySide6.QtCore import QPointF
     from PySide6.QtGui import QMouseEvent
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (300, 250))
     o.toolbar.move_now(o.toolbar._slide.endValue())    # анимация появления закончилась
-    br = QPoint(o._sel.right(), o._sel.bottom() + 4)     # в зоне ручки правого нижнего угла
-    assert o._hit_handle(br) == "br"
-    assert o.toolbar.geometry().contains(br)             # …и на прозрачном поле тени панели
+    for hid, pt in o._handle_points():
+        zone = QRect(pt.toPoint() - QPoint(HANDLE_HIT, HANDLE_HIT), QSize(2 * HANDLE_HIT + 1, 2 * HANDLE_HIT + 1))
+        assert not o.toolbar.geometry().intersects(zone), hid
+        assert o._hit_handle(pt.toPoint()) == hid
 
     def hover(widget, pt):
         pt = QPointF(pt)
@@ -568,9 +572,8 @@ def test_handle_cursor_under_toolbar_shadow(qapp):
                                            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
                                            Qt.KeyboardModifier.NoModifier))
 
-    hover(o, QPoint(200, 200))
-    assert o.cursor().shape() == Qt.CursorShape.OpenHandCursor
-    hover(o.toolbar, o.toolbar.mapFrom(o, br))           # движение приходит панели, а не оверлею
+    br = QPoint(o._sel.right(), o._sel.bottom())
+    hover(o, br)
     assert o.cursor().shape() == Qt.CursorShape.SizeFDiagCursor
     o.close()
 
@@ -1414,3 +1417,27 @@ def test_emoji_recent_setting_is_cleaned(qapp):
 
     assert Settings(emoji_recent="oops").emoji_recent == []
     assert Settings(emoji_recent=["🔥", 5, "", "x" * 40, "👍"]).emoji_recent == ["🔥", "👍"]
+
+
+def test_del_while_holding_outside_step_deletes_it_and_keeps_dim(qapp):
+    """Номер за рамкой: зажали ЛКМ и нажали Del — номер удаляется, как при простом наведении,
+    а затемнение вокруг выделения остаётся."""
+    from kadr.overlay.shapes import Tool
+
+    L, N = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    o = _overlay(qapp)
+    o._dim = 1.0
+    _drag(o, (100, 100), (400, 300))
+    o.set_tool(Tool.STEP)
+    QTest.mouseClick(o, L, N, QPoint(60, 175))
+    assert len(o._history.shapes) == 1
+    QTest.mousePress(o, L, N, QPoint(60, 175))
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert not o._history.shapes
+    QTest.mouseRelease(o, L, N, QPoint(60, 175))
+    assert not o._history.shapes
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert len(o._history.shapes) == 1
+    img = o.grab().toImage()
+    assert img.pixelColor(20, 20).red() < 200          # фон за рамкой затемнён
+    o.close()

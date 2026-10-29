@@ -124,24 +124,21 @@ class IconButton(QToolButton):
 
 
 class PrimaryButton(QToolButton):
-    """Главное действие панели — «Копировать»: заливка цветом акцента и подпись, чтобы не искать глазами."""
+    """Главное действие панели — «Копировать»: значок на заливке цветом акцента, чтобы не искать глазами."""
 
-    def __init__(self, icon_name: str, text: str, tip: str, parent=None) -> None:
+    def __init__(self, icon_name: str, tip: str, parent=None) -> None:
         super().__init__(parent)
         self.icon_name = icon_name
-        self.setText(text)
         self.setToolTip(tip)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setIconSize(QSize(18, 18))
-        self.setFixedHeight(34)
+        self.setIconSize(QSize(20, 20))
+        self.setFixedSize(34, 34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def apply_theme(self, t: Tokens) -> None:
         self.setIcon(icons.icon(self.icon_name, t.accent_text))
         self.setStyleSheet(f"""
-            QToolButton {{ background: {t.accent}; color: {t.accent_text}; border: none; border-radius: 8px;
-                           padding: 0 12px 0 9px; font-size: 13px; font-weight: 600; }}
+            QToolButton {{ background: {t.accent}; border: none; border-radius: 8px; }}
             QToolButton:hover {{ background: {QColor(t.accent).lighter(110).name()}; }}
             QToolButton:pressed {{ background: {QColor(t.accent).darker(110).name()}; }}
         """)
@@ -247,7 +244,7 @@ class Toolbar(Panel):
         row.addWidget(self._sep())
         self._action("pin", "Закрепить поверх окон  (Ctrl+T)", self.pin, row)
         self._action("save", "Сохранить в папку  (Ctrl+S)", self.save, row)
-        self.copy_btn = PrimaryButton("copy", "Копировать", "Скопировать в буфер  (Ctrl+C / Enter)", self)
+        self.copy_btn = PrimaryButton("copy", "Скопировать в буфер  (Ctrl+C / Enter)", self)
         self.copy_btn.clicked.connect(self.copy)
         row.addSpacing(3)
         row.addWidget(self.copy_btn)
