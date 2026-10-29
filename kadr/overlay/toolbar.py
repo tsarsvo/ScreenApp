@@ -15,6 +15,7 @@ from ..config import DEFAULT_PALETTE
 from ..theme import Tokens
 from ..ui.color_picker import ColorField, HueBar
 from . import emoji_data
+from .emoji_data import CATEGORY_TITLES
 from .shapes import EMOJI_FONTS, Tool
 
 SHADOW = 10          # поле под мягкую тень вокруг панели
@@ -587,6 +588,14 @@ class EmojiPopup(Panel):
         self.scroll.setFixedSize(EMOJI_COLS * EMOJI_CELL + 14, 6 * EMOJI_CELL)
         self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         col.addWidget(self.scroll)
+        # Виджет прокрутки один на всю жизнь: QScrollArea.setWidget удаляет прежний виджет,
+        # поэтому список и результаты поиска меняем внутри него (см. _show)
+        self._view = QWidget()
+        self._view_lay = QVBoxLayout(self._view)
+        self._view_lay.setContentsMargins(0, 0, 0, 0)
+        self._view_lay.setSpacing(0)
+        self.scroll.setWidget(self._view)
+        self._browse: QWidget | None = None
 
         self.status = QLabel("", self)
         self.status.setObjectName("Hint")
@@ -646,7 +655,22 @@ class EmojiPopup(Panel):
             self.tabs.addWidget(tab)
         self.tabs.addStretch(1)
         lay.addStretch(1)
-        self.scroll.setWidget(self._browse)
+        self._show(self._browse)
+
+    def _show(self, w: QWidget) -> None:
+        """Показать w в прокрутке. Прежние результаты поиска удаляются, список категорий прячется,
+        но не удаляется — его потом снова показываем."""
+        while self._view_lay.count():
+            old = self._view_lay.takeAt(0).widget()
+            if old is None:
+                continue
+            if old is self._browse:
+                old.hide()
+            else:
+                old.deleteLater()
+        self._view_lay.addWidget(w)
+        self._view_lay.addStretch(1)
+        w.show()
 
     def _fill_recent(self) -> None:
         while self._recent_box.count():
@@ -659,7 +683,7 @@ class EmojiPopup(Panel):
 
     def _jump(self, name: str) -> None:
         self.search.clear()
-        self.scroll.setWidget(self._browse)
+        self._show(self._browse)
         self.scroll.verticalScrollBar().setValue(self._anchors[name].y())
 
     # --- поиск ---------------------------------------------------------------------------------
@@ -667,7 +691,7 @@ class EmojiPopup(Panel):
         if not self._built:
             return
         if not text.strip():
-            self.scroll.setWidget(self._browse)
+            self._show(self._browse)
             self.status.setText("")
             return
         found = emoji_data.search(text)
@@ -676,7 +700,7 @@ class EmojiPopup(Panel):
             box = QLabel("Попробуйте другое слово", self)
             box.setObjectName("Hint")
             box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.scroll.setWidget(box)
+            self._show(box)
             return
         self.status.setText(f"Найдено: {len(found)}")
         box = QWidget()
@@ -684,7 +708,7 @@ class EmojiPopup(Panel):
         lay.setContentsMargins(0, 0, 4, 0)
         lay.addWidget(self._grid(found))
         lay.addStretch(1)                       # сетка прижата к верху, а не растянута на всю высоту
-        self.scroll.setWidget(box)
+        self._show(box)
 
     def eventFilter(self, obj, e) -> bool:
         # Enter в поиске выбирает первый найденный; Esc закрывает панель, а не оверлей
@@ -723,7 +747,7 @@ class EmojiPopup(Panel):
         else:
             self._fill_recent()
         self.search.clear()
-        self.scroll.setWidget(self._browse)
+        self._show(self._browse)
         self.scroll.verticalScrollBar().setValue(0)
         self.status.setText("")
         self.layout().activate()
@@ -750,9 +774,3 @@ class EmojiPopup(Panel):
             QScrollBar::handle:vertical {{ background: {t.border}; border-radius: 3px; min-height: 24px; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
-
-
-CATEGORY_TITLES = {
-    "smileys": "Смайлы", "people": "Люди и жесты", "nature": "Природа", "food": "Еда и напитки",
-    "activity": "Активности", "travel": "Путешествия", "objects": "Предметы", "symbols": "Символы",
-}
