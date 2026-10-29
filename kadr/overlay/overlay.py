@@ -668,6 +668,21 @@ class Overlay(QWidget):
         self.update()
         return True
 
+    def _cancel_move(self) -> bool:
+        """Возвращает фигуру или номер шага на место до нажатия (кнопка может быть ещё зажата)."""
+        if self._mode == "dragging" and self._drag_step is not None:
+            self._drag_step.pos = QPointF(self._drag_from)
+            self._drag_step = None
+        elif self._mode == "editing" and self._edit_shape is not None:
+            set_geometry(self._edit_shape, self._edit_from)
+            self._edit_shape = None
+        else:
+            return False
+        self._mode = "idle"
+        self._invalidate_layer()            # шаг или фигура снова на своём месте в слое
+        self.update()
+        return True
+
     def _nudge(self, direction: tuple[int, int], big: bool) -> bool:
         """Стрелки на клавиатуре двигают активную фигуру (под курсором или взятую мышью) на 1 px,
         с Shift — на 10: так её можно поставить точно. Ctrl+Z возвращает на место."""
@@ -703,10 +718,13 @@ class Overlay(QWidget):
         s = self._sel
         x = s.right() + 1 - tw + SHADOW                      # выравнивание по правому краю
         x = max(-SHADOW + 4, min(x, self.width() - tw + SHADOW - 4))
-        if s.bottom() + GAP + body_h <= self.height() - 4:
-            y = s.bottom() + GAP - SHADOW
-        elif s.top() - GAP - body_h >= 4:
-            y = s.top() - GAP - body_h - SHADOW
+        # Виджет панели (вместе с прозрачным полем тени) не должен заходить на зону ручек рамки:
+        # иначе нижние и верхние точки изменения размера попадают в панель, а не в оверлей.
+        clear = HANDLE_HIT + 2
+        if s.bottom() + clear + th <= self.height() - 4:
+            y = s.bottom() + clear
+        elif s.top() - clear - th >= 4:
+            y = s.top() - clear - th
         else:
             y = s.bottom() - GAP - body_h - SHADOW           # экран занят целиком — внутри снизу
         self.toolbar.appear_at(QPoint(x, y))
@@ -823,7 +841,10 @@ class Overlay(QWidget):
             s = self.rect()      # шаг можно вынести за рамку, но не за экран
             self._drag_step.pos = QPointF(min(max(c.x(), s.left()), s.right()),
                                           min(max(c.y(), s.top()), s.bottom()))
-            self._update_shape_area(before)
+            if self._outside_step(self._drag_step) or not self._sel.contains(self._drag_from.toPoint()):
+                self.update()          # номер за рамкой: его след лежит вне области выделения
+            else:
+                self._update_shape_area(before)
             return
         elif self._mode == "editing" and self._edit_shape:
             before = self._edit_shape.bounds()
@@ -1248,6 +1269,9 @@ class Overlay(QWidget):
 
         if e.key() == Qt.Key.Key_Space and self._mode == "selecting":
             self._space = True          # держим пробел — рамка выделения двигается за мышью
+            return
+        if e.key() == Qt.Key.Key_Delete and self._mode in ("dragging", "editing") and self._cancel_move():
+            self._delete_hovered()          # Del во время перетаскивания: отменяем перенос и удаляем фигуру
             return
         if self._mode != "idle" and e.key() != Qt.Key.Key_Escape:
             # Кнопка мыши ещё зажата (фигуру тянут, рисуют, двигают рамку) — Ctrl+Z, Ctrl+A,
