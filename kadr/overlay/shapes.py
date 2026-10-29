@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 
 class Tool(Enum):
@@ -200,29 +200,58 @@ TEXT_MIN_PX, TEXT_MAX_PX = 8, 300
 EMOJI_FONTS = ["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Twemoji Mozilla"]
 
 
-@dataclass
-class EmojiShape(TextShape):
-    """Эмодзи на снимке. Устроено как текст из одного символа: так же переносится и меняет
-    размер (за угловые точки), а размер шрифта — это и есть размер эмодзи."""
+EMOJI_RASTER_PX = 256     # эмодзи рисуются один раз в этом размере и уменьшаются/растягиваются плавно
+_emoji_cache: dict[str, QPixmap] = {}
 
-    def font(self) -> QFont:
+
+def _emoji_pixmap(text: str) -> QPixmap:
+    """Эмодзи как картинка. Шрифты эмодзи (Noto Color Emoji и др.) хранятся растровыми «кеглями»,
+    поэтому при каждом новом размере шрифта глиф скачет. Один раз рисуем крупно и дальше
+    только масштабируем картинку — размер меняется плавно."""
+    pix = _emoji_cache.get(text)
+    if pix is None:
+        img = QImage(EMOJI_RASTER_PX, EMOJI_RASTER_PX, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(Qt.GlobalColor.transparent)
         f = QFont()
         f.setFamilies(EMOJI_FONTS)
-        f.setPixelSize(self.font_px())
-        return f
+        f.setPixelSize(int(EMOJI_RASTER_PX * 0.8))
+        q = QPainter(img)
+        q.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        q.setFont(f)
+        q.drawText(QRectF(0, 0, EMOJI_RASTER_PX, EMOJI_RASTER_PX), Qt.AlignmentFlag.AlignCenter, text)
+        q.end()
+        pix = QPixmap.fromImage(img)
+        _emoji_cache[text] = pix
+    return pix
+
+
+@dataclass
+class EmojiShape(TextShape):
+    """Эмодзи на снимке. Переносится и меняет размер так же, как текст (за угловые точки).
+    Размер — дробное число пикселей: при плавном движении мыши он не округляется до целых."""
+
+    size: float = 0.0
+
+    def font_px(self) -> float:
+        return self.size or font_px_for_width(self.width)
+
+    def side(self) -> float:
+        return self.font_px() * 1.25       # запас по краям: у составных эмодзи ширина по шрифту ненадёжна
 
     def bounds_text(self) -> QRectF:
-        side = self.font_px() * 1.25      # у эмодзи (особенно составных) ширина по шрифту ненадёжна
+        side = self.side()
         return QRectF(self.pos, QPointF(self.pos.x() + side, self.pos.y() + side))
 
     def is_empty(self) -> bool:
         return not self.text
 
     def paint(self, p: QPainter) -> None:
+        pix = _emoji_pixmap(self.text)
+        box = self.bounds_text().center()
+        half = self.font_px() / 2
         p.save()
-        p.setFont(self.font())
-        p.setPen(QColor("#000000"))      # цвет эмодзи берут из шрифта; перо нужно лишь для запасных монохромных
-        p.drawText(self.bounds_text(), Qt.AlignmentFlag.AlignCenter, self.text)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        p.drawPixmap(QRectF(box.x() - half, box.y() - half, 2 * half, 2 * half), pix, QRectF(pix.rect()))
         p.restore()
 
 
@@ -237,7 +266,9 @@ def geometry(shape: Shape) -> tuple:
 
 
 def set_geometry(shape: Shape, geom: tuple) -> None:
-    if isinstance(shape, TextShape):
+    if isinstance(shape, EmojiShape):
+        shape.pos, shape.size = QPointF(geom[0]), float(geom[1])
+    elif isinstance(shape, TextShape):
         shape.pos, shape.size = QPointF(geom[0]), int(geom[1])
     elif isinstance(shape, PenStroke):
         shape.points = [QPointF(pt) for pt in geom[0]]
