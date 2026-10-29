@@ -7,8 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QPixmap
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPixmap, QPolygonF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -18,6 +18,34 @@ from kadr.hotkeys import Hotkey
 @pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def _moves_carry_pressed_buttons(monkeypatch):
+    """Настоящая мышь присылает движения с зажатой кнопкой в buttons(); QTest.mouseMove шлёт NoButton.
+    Оверлей по buttons() замечает потерянное отпускание, поэтому в тестах движения должны быть настоящими."""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    down = [Qt.MouseButton.NoButton]
+    press, release = QTest.mousePress, QTest.mouseRelease
+
+    def mouse_press(widget, button, *args, **kw):
+        down[0] = button
+        return press(widget, button, *args, **kw)
+
+    def mouse_release(widget, button, *args, **kw):
+        down[0] = Qt.MouseButton.NoButton
+        return release(widget, button, *args, **kw)
+
+    def mouse_move(widget, pos, delay=-1):
+        p = QPointF(pos)
+        QApplication.sendEvent(widget, QMouseEvent(QEvent.Type.MouseMove, p, widget.mapToGlobal(p),
+                                                   Qt.MouseButton.NoButton, down[0], Qt.KeyboardModifier.NoModifier))
+
+    monkeypatch.setattr(QTest, "mousePress", mouse_press)
+    monkeypatch.setattr(QTest, "mouseRelease", mouse_release)
+    monkeypatch.setattr(QTest, "mouseMove", mouse_move)
 
 
 # ---------------------------------------------------------------- hotkeys
@@ -342,7 +370,7 @@ def test_rapid_clicks_do_not_select_screen_or_copy(qapp):
     send(QEvent.Type.MouseButtonPress, 100, 100)
     send(QEvent.Type.MouseButtonRelease, 100, 100)
     send(QEvent.Type.MouseButtonDblClick, 100, 100)
-    QTest.mouseMove(o, QPoint(260, 220))
+    send(QEvent.Type.MouseMove, 260, 220)
     send(QEvent.Type.MouseButtonRelease, 260, 220)
     assert o._sel == QRect(QPoint(100, 100), QPoint(260, 220)) and not copied
 
@@ -458,7 +486,7 @@ def test_overlay_pin_emits_selection_at_its_screen_position(qapp):
 # ------------------------------------------------ рисование за выделением, шаги, закреплённый снимок
 def test_drawing_outside_selection_keeps_it_and_clips(qapp):
     """Рисовать можно начать и за рамкой, но рамка не меняется: в файл попадает только
-    то, что внутри. Текст и номер шага за рамкой не ставятся (их не было бы видно)."""
+    то, что внутри. Текст за рамкой не ставится (его не было бы видно)."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
@@ -473,10 +501,9 @@ def test_drawing_outside_selection_keeps_it_and_clips(qapp):
     img = o.render_selection()
     assert (img.width(), img.height()) == (sel0.width() * 2, sel0.height() * 2)
     assert img.pixelColor((250 - 100) * 2, (175 - 100) * 2).blue() > 200   # часть внутри — в файле
-    for tool in (Tool.TEXT, Tool.STEP):
-        o.set_tool(tool)
-        QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 400))
-        o._commit_text()
+    o.set_tool(Tool.TEXT)
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 400))
+    o._commit_text()
     assert len(o._history.shapes) == 2 and o._editing is None
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert o._sel == sel0 and len(o._history.shapes) == 1
@@ -500,8 +527,8 @@ def test_step_can_be_dragged_by_its_center_and_undone(qapp):
     assert len(o._history.shapes) == 2                   # новый шаг не появился
     assert first.pos == QPointF(300, 320) and first.number == 1
     o.set_tool(Tool.SELECT)
-    _drag(o, (302, 322), (1000, 1000))                   # и в режиме «Выделение»; наружу не уходит
-    assert o._sel.contains(first.pos.toPoint())
+    _drag(o, (302, 322), (1000, 1000))                   # и в режиме «Выделение»; за экран не уходит
+    assert o.rect().contains(first.pos.toPoint()) and not o._sel.contains(first.pos.toPoint())
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert first.pos == QPointF(300, 320)
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
@@ -1185,7 +1212,9 @@ def test_keys_ignored_while_mouse_drags_shape(qapp):
     o.close()
 
 
-def test_step_cannot_be_dragged_out_of_selection_while_placing(qapp):
+def test_step_can_be_placed_outside_selection_but_not_off_screen(qapp):
+    from PySide6.QtCore import QPointF
+
     from kadr.overlay.shapes import Tool
 
     L, N = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
@@ -1196,7 +1225,11 @@ def test_step_cannot_be_dragged_out_of_selection_while_placing(qapp):
     QTest.mouseMove(o, QPoint(500, 50))
     QTest.mouseRelease(o, L, N, QPoint(500, 50))
     step = o._history.shapes[0]
-    assert o._sel.contains(step.pos.toPoint())
+    assert step.pos == QPointF(500, 50) and not o._sel.contains(step.pos.toPoint())
+    QTest.mousePress(o, L, N, QPoint(500, 50))
+    QTest.mouseMove(o, QPoint(5000, 5000))
+    QTest.mouseRelease(o, L, N, QPoint(5000, 5000))
+    assert o.rect().contains(step.pos.toPoint())
     o.close()
 
 
@@ -1216,3 +1249,168 @@ def test_pin_ignores_horizontal_wheel(qapp):
     qapp.sendEvent(w, ev)
     assert w.size() == size
     w.close()
+
+
+# ------------------------------------------------- номера за рамкой, эмодзи, правка фигур
+def _click(o, x, y):
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
+
+
+def test_steps_outside_selection_extend_export_with_white_margin(qapp):
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (300, 250))
+    sel = QRect(o._sel)
+    o.set_tool(Tool.STEP)
+    _click(o, 200, 150)                                  # внутри — как раньше, поля не нужны
+    assert o.export_rect() == sel
+    assert o.render_selection().width() == sel.width() * 2
+    _click(o, 60, 175)                                   # слева от рамки
+    ext = o.export_rect()
+    assert ext.left() < sel.left() and ext.right() == sel.right() and ext.top() == sel.top()
+    img = o.render_selection()
+    assert (img.width(), img.height()) == (ext.width() * 2, ext.height() * 2)
+    margin = (sel.left() - ext.left()) * 2
+    assert img.pixelColor(2, img.height() - 3) == QColor("white")              # поле белое, не чужой экран
+    assert img.pixelColor(margin + 40, 40) == QColor("white")                  # скриншот на своём месте (он белый)
+    step = o._history.shapes[-1]
+    assert img.pixelColor(round((60 - ext.x()) * 2), round((175 - ext.y()) * 2)) != QColor("white")
+    o.pin_requested.connect(lambda *_: None)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert o.export_rect() == sel and step not in o._history.shapes
+    o.close()
+
+
+def test_emoji_search_pick_place_move_resize_delete(qapp):
+    from kadr.overlay import emoji_data
+    from kadr.overlay.shapes import EmojiShape, Tool
+
+    assert "🔥" in emoji_data.search("огонь") and "🔥" in emoji_data.search("FIRE")
+    assert emoji_data.search("   ") == [] and emoji_data.search("zzzzqq") == []
+
+    o = _overlay(qapp, 800, 600)
+    recent = []
+    o.emoji_recent_changed.connect(recent.append)
+    _drag(o, (100, 100), (500, 400))
+    QTest.keyClick(o, Qt.Key.Key_J)
+    assert o._tool == Tool.EMOJI and o.emoji_popup.isVisible()
+    o.emoji_popup.search.setText("огонь")
+    o.emoji_popup.choose("🔥")
+    assert not o.emoji_popup.isVisible() and o._emoji == "🔥" and recent == [["🔥"]]
+
+    _click(o, 300, 250)
+    em = o._history.shapes[-1]
+    assert isinstance(em, EmojiShape) and em.text == "🔥"
+    assert abs(em.bounds_text().center().x() - 300) < 1                     # встал по центру клика
+    _click(o, 20, 20)                                                       # за рамкой не ставится
+    assert len(o._history.shapes) == 1
+
+    o.set_tool(Tool.SELECT)
+    top_left = em.bounds_text().topLeft()
+    edge = QPoint(round(top_left.x()), round(top_left.y() + em.bounds_text().height() / 2))
+    _drag(o, (edge.x(), edge.y()), (edge.x() + 60, edge.y() + 30))
+    assert em.bounds_text().topLeft() == top_left + QPointF(60, 30)         # перенесён
+    size0 = em.font_px()
+    c = em.bounds_text().bottomRight() + QPointF(4, 2)                      # угловая точка рамки
+    QTest.mouseMove(o, c.toPoint())
+    _drag(o, (round(c.x()), round(c.y())), (round(c.x()) + 40, round(c.y()) + 40))
+    assert em.font_px() > size0
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert em not in o._history.shapes
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert em in o._history.shapes
+    o.close()
+
+
+def test_pen_marker_pixelate_can_be_moved_resized_deleted_with_select_tool(qapp):
+    from kadr.overlay.shapes import PenStroke, Tool
+
+    o = _overlay(qapp, 800, 600)
+    _drag(o, (50, 50), (700, 500))
+    o.set_tool(Tool.PEN)
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 200))
+    for x in range(210, 301, 10):
+        QTest.mouseMove(o, QPoint(x, 200 + (x - 200) // 2))
+    QTest.mouseRelease(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 250))
+    stroke = o._history.shapes[0]
+    assert isinstance(stroke, PenStroke)
+    # пока выбрана кисть — рядом со штрихом можно спокойно рисовать дальше
+    QTest.mouseMove(o, QPoint(250, 225))
+    assert o._editable_at(QPoint(250, 225)) is None
+
+    o.set_tool(Tool.SELECT)
+    before = [QPointF(pt) for pt in stroke.points]
+    _drag(o, (250, 225), (250, 325))                                        # за линию — перенос
+    assert stroke.points[0] == before[0] + QPointF(0, 100)
+    box = QRectF(QPolygonF(stroke.points).boundingRect())
+    w0 = box.width()
+    br = box.bottomRight().toPoint()
+    QTest.mouseMove(o, br)
+    _drag(o, (br.x(), br.y()), (br.x() + 50, br.y() + 20))                  # за угол рамки — размер
+    assert QPolygonF(stroke.points).boundingRect().width() > w0
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert QPolygonF(stroke.points).boundingRect().width() == pytest.approx(w0)
+
+    mid = stroke.points[len(stroke.points) // 2].toPoint()
+    QTest.mouseMove(o, mid)
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert not o._history.shapes
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert o._history.shapes == [stroke]
+
+    o.set_tool(Tool.PIXELATE)
+    _drag(o, (400, 300), (500, 380))
+    px = o._history.shapes[-1]
+    QTest.mouseMove(o, QPoint(400, 340))
+    _drag(o, (400, 340), (420, 360))                                        # левая сторона пикселизации
+    assert px.rect().left() == 420
+    o.close()
+
+
+def test_picked_shape_stays_active_for_delete_and_arrows_nudge_it(qapp):
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp, 800, 600)
+    _drag(o, (50, 50), (700, 500))
+    o.set_tool(Tool.RECT)
+    _drag(o, (200, 200), (300, 280))
+    rect = o._history.shapes[0]
+    QTest.mouseMove(o, QPoint(250, 200))
+    _click(o, 250, 200)                                                     # взяли за контур
+    QTest.mouseMove(o, QPoint(600, 450))                                    # курсор ушёл далеко
+    assert o._hover_shape is rect
+    QTest.keyClick(o, Qt.Key.Key_Right)
+    QTest.keyClick(o, Qt.Key.Key_Down, Qt.KeyboardModifier.ShiftModifier)
+    assert rect.start == QPointF(201, 210)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert rect.start == QPointF(200, 200)
+    QTest.keyClick(o, Qt.Key.Key_Delete)                                    # мышь далеко, но фигура выбрана
+    assert not o._history.shapes
+    o.close()
+
+
+def test_lost_mouse_release_does_not_leave_selection_stuck(qapp):
+    """Если кнопку отпустили там, где оверлей не увидел отпускания, следующее движение без
+    зажатой кнопки завершает перетаскивание, а не тянет рамку за курсором."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QMouseEvent
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (300, 250))
+    QTest.mousePress(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 170))
+    QTest.mouseMove(o, QPoint(230, 190))
+    assert o._mode == "moving" and o._sel.topLeft() == QPoint(130, 120)
+    p = QPointF(400, 400)
+    qapp.sendEvent(o, QMouseEvent(QEvent.Type.MouseMove, p, o.mapToGlobal(p), Qt.MouseButton.NoButton,
+                                  Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+    assert o._mode == "idle" and o._sel.topLeft() == QPoint(130, 120) and o.toolbar.isVisible()
+    o.close()
+
+
+def test_emoji_recent_setting_is_cleaned(qapp):
+    from kadr.config import Settings
+
+    assert Settings(emoji_recent="oops").emoji_recent == []
+    assert Settings(emoji_recent=["🔥", 5, "", "x" * 40, "👍"]).emoji_recent == ["🔥", "👍"]

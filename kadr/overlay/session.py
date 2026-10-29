@@ -14,17 +14,20 @@ class CaptureSession(QObject):
     save_requested = Signal(QImage)
     style_changed = Signal(QColor, int)
     palette_changed = Signal(list)
+    emoji_recent_changed = Signal(list)
     pin_requested = Signal(QImage, QPoint, float)
     finished = Signal()
 
     def __init__(self, shots: list[ScreenShot], tokens: Tokens, color: QColor, width: int,
-                 palette: list[str] | None = None) -> None:
+                 palette: list[str] | None = None,
+                 emoji_recent: list[str] | None = None) -> None:
         super().__init__()
         self._done = False
         self.overlays: list[Overlay] = []
         for shot in shots:
-            o = Overlay(shot, tokens, color, width, palette)
+            o = Overlay(shot, tokens, color, width, palette, emoji_recent)
             o.palette_changed.connect(self.palette_changed)
+            o.emoji_recent_changed.connect(self._on_emoji_recent)
             o.selection_started.connect(self._on_selection_started)
             o.copy_requested.connect(lambda img: self._finish(self.copy_requested, img))
             o.save_requested.connect(lambda img: self._finish(self.save_requested, img))
@@ -50,6 +53,11 @@ class CaptureSession(QObject):
         for o in self.overlays:
             o.set_style(color, width)
         self.style_changed.emit(color, width)
+
+    def _on_emoji_recent(self, recent: list) -> None:
+        for o in self.overlays:
+            o.set_emoji_recent(recent)
+        self.emoji_recent_changed.emit(recent)
 
     def _on_pin(self, image: QImage, top_left: QPoint, dpr: float) -> None:
         self._finish(None, None)

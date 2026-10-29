@@ -25,6 +25,7 @@ class Tool(Enum):
     MARKER = "marker"
     PIXELATE = "pixelate"
     STEP = "step"
+    EMOJI = "emoji"
 
 
 def _pen(color: QColor, width: float, join=Qt.PenJoinStyle.RoundJoin) -> QPen:
@@ -196,18 +197,50 @@ class TextShape(Shape):
 
 TEXT_MIN_PX, TEXT_MAX_PX = 8, 300
 
+EMOJI_FONTS = ["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Twemoji Mozilla"]
+
+
+@dataclass
+class EmojiShape(TextShape):
+    """Эмодзи на снимке. Устроено как текст из одного символа: так же переносится и меняет
+    размер (за угловые точки), а размер шрифта — это и есть размер эмодзи."""
+
+    def font(self) -> QFont:
+        f = QFont()
+        f.setFamilies(EMOJI_FONTS)
+        f.setPixelSize(self.font_px())
+        return f
+
+    def bounds_text(self) -> QRectF:
+        side = self.font_px() * 1.25      # у эмодзи (особенно составных) ширина по шрифту ненадёжна
+        return QRectF(self.pos, QPointF(self.pos.x() + side, self.pos.y() + side))
+
+    def is_empty(self) -> bool:
+        return not self.text
+
+    def paint(self, p: QPainter) -> None:
+        p.save()
+        p.setFont(self.font())
+        p.setPen(QColor("#000000"))      # цвет эмодзи берут из шрифта; перо нужно лишь для запасных монохромных
+        p.drawText(self.bounds_text(), Qt.AlignmentFlag.AlignCenter, self.text)
+        p.restore()
+
 
 def geometry(shape: Shape) -> tuple:
     """Положение и размер фигуры, которые можно поменять мышью, — для отмены (Ctrl+Z).
     Текст: (левый верхний угол, размер шрифта); стрелка, линия, рамка, овал: (начало, конец)."""
     if isinstance(shape, TextShape):
         return QPointF(shape.pos), shape.font_px()
+    if isinstance(shape, PenStroke):
+        return (tuple(QPointF(pt) for pt in shape.points),)
     return QPointF(shape.start), QPointF(shape.end)
 
 
 def set_geometry(shape: Shape, geom: tuple) -> None:
     if isinstance(shape, TextShape):
         shape.pos, shape.size = QPointF(geom[0]), int(geom[1])
+    elif isinstance(shape, PenStroke):
+        shape.points = [QPointF(pt) for pt in geom[0]]
     else:
         shape.start, shape.end = QPointF(geom[0]), QPointF(geom[1])
 

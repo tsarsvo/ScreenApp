@@ -69,6 +69,7 @@ class Settings:
     pen_color: str = "#FF3B30"
     pen_width: int = 4
     palette: list = field(default_factory=lambda: list(DEFAULT_PALETTE))
+    emoji_recent: list = field(default_factory=list)   # последние выбранные эмодзи, свежие первыми
 
     def __post_init__(self) -> None:
         if not self.save_dir:
@@ -78,6 +79,8 @@ class Settings:
         self.quality = max(1, min(100, int(self.quality)))
         self.pen_width = max(1, min(40, int(self.pen_width)))
         self.palette = _clean_palette(self.palette)
+        self.emoji_recent = [e for e in self.emoji_recent if isinstance(e, str) and 0 < len(e) <= 16][:24] \
+            if isinstance(self.emoji_recent, list) else []
         self.replay_minutes = max(1, min(5, int(self.replay_minutes)))
         if self.replay_fps not in (30, 60):
             self.replay_fps = 30
