@@ -1441,3 +1441,31 @@ def test_del_while_holding_outside_step_deletes_it_and_keeps_dim(qapp):
     img = o.grab().toImage()
     assert img.pixelColor(20, 20).red() < 200          # фон за рамкой затемнён
     o.close()
+
+
+def test_emoji_resizes_smoothly_with_fractional_size(qapp):
+    """Размер эмодзи меняется плавно: дробные пиксели не округляются (иначе глиф «прыгает»),
+    а растр эмодзи один и тот же при любом размере."""
+    from kadr.overlay import shapes as sh
+    from kadr.overlay.shapes import EmojiShape, Tool
+
+    o = _overlay(qapp, 800, 600)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.EMOJI)
+    o._emoji = "🔥"
+    QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 250))
+    o.emoji_popup.hide()
+    em = o._history.shapes[-1]
+    assert isinstance(em, EmojiShape)
+    o.set_tool(Tool.SELECT)
+    c = em.bounds_text().bottomRight().toPoint()
+    QTest.mouseMove(o, c)
+    sizes = []
+    for step in range(1, 6):
+        _drag(o, (c.x() + step - 1, c.y() + step - 1), (c.x() + step, c.y() + step))
+        sizes.append(em.font_px())
+    assert all(b > a for a, b in zip(sizes, sizes[1:], strict=False))
+    assert any(abs(sz - round(sz)) > 1e-6 for sz in sizes)      # дробные значения сохраняются
+    pix = sh._emoji_pixmap("🔥")
+    assert sh._emoji_pixmap("🔥") is pix                        # растр один и тот же, без пересборки
+    o.close()

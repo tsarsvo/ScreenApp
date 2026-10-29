@@ -1054,7 +1054,9 @@ class Overlay(QWidget):
         sx, sy = (1 if "r" in h else -1), (1 if "b" in h else -1)
         k = max((box0.width() + sx * d.x()) / max(box0.width(), 1.0),
                 (box0.height() + sy * d.y()) / max(box0.height(), 1.0))
-        shape.size = round(min(TEXT_MAX_PX, max(TEXT_MIN_PX, size0 * k)))
+        size = min(TEXT_MAX_PX, max(TEXT_MIN_PX, size0 * k))
+        # эмодзи — дробный размер (плавно), текст — целый (шрифт не умеет дробные пиксели)
+        shape.size = size if isinstance(shape, EmojiShape) else round(size)
         box = shape.bounds_text()
         shape.pos = QPointF(box0.right() - box.width() if "l" in h else box0.left(),
                             box0.bottom() - box.height() if "t" in h else box0.top())
