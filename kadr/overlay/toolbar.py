@@ -458,6 +458,9 @@ class StylePopup(Panel):
         row.setSpacing(8)
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
         self.slider.setRange(1, 40)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(4)
+        self.slider.setMinimumWidth(160)
         self.slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.slider.valueChanged.connect(self._on_slider)
         self.value = QLabel("4", self)
@@ -581,10 +584,11 @@ class StylePopup(Panel):
                          border-radius: 7px; padding: 4px 6px; font-family: monospace; font-size: 12px;
                          selection-background-color: {t.accent}; }}
             QLineEdit:focus {{ border-color: {t.accent}; }}
-            QSlider::groove:horizontal {{ height: 4px; background: {t.border}; border-radius: 2px; }}
-            QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 2px; }}
-            QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
-                                          background: {t.surface}; border: 1px solid {t.border}; }}
+            QSlider::groove:horizontal {{ height: 6px; background: {t.border}; border-radius: 3px; }}
+            QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 3px; }}
+            QSlider::handle:horizontal {{ width: 22px; height: 22px; margin: -8px 0; border-radius: 11px;
+                                          background: {t.surface}; border: 2px solid {t.accent}; }}
+            QSlider::handle:horizontal:hover {{ background: {t.hover}; }}
         """)
 
 

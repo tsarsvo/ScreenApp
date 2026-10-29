@@ -231,6 +231,7 @@ class EmojiShape(TextShape):
     Размер — дробное число пикселей: при плавном движении мыши он не округляется до целых."""
 
     size: float = 0.0
+    angle: float = 0.0          # поворот вокруг центра, градусы (ручка над эмодзи)
 
     def font_px(self) -> float:
         return self.size or font_px_for_width(self.width)
@@ -247,17 +248,21 @@ class EmojiShape(TextShape):
 
     def paint(self, p: QPainter) -> None:
         pix = _emoji_pixmap(self.text)
-        box = self.bounds_text().center()
         half = self.font_px() / 2
         p.save()
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        p.drawPixmap(QRectF(box.x() - half, box.y() - half, 2 * half, 2 * half), pix, QRectF(pix.rect()))
+        c = self.bounds_text().center()
+        p.translate(c)
+        p.rotate(self.angle)
+        p.drawPixmap(QRectF(-half, -half, 2 * half, 2 * half), pix, QRectF(pix.rect()))
         p.restore()
 
 
 def geometry(shape: Shape) -> tuple:
     """Положение и размер фигуры, которые можно поменять мышью, — для отмены (Ctrl+Z).
     Текст: (левый верхний угол, размер шрифта); стрелка, линия, рамка, овал: (начало, конец)."""
+    if isinstance(shape, EmojiShape):
+        return QPointF(shape.pos), shape.font_px(), shape.angle
     if isinstance(shape, TextShape):
         return QPointF(shape.pos), shape.font_px()
     if isinstance(shape, PenStroke):
@@ -268,6 +273,7 @@ def geometry(shape: Shape) -> tuple:
 def set_geometry(shape: Shape, geom: tuple) -> None:
     if isinstance(shape, EmojiShape):
         shape.pos, shape.size = QPointF(geom[0]), float(geom[1])
+        shape.angle = float(geom[2]) if len(geom) > 2 else 0.0
     elif isinstance(shape, TextShape):
         shape.pos, shape.size = QPointF(geom[0]), int(geom[1])
     elif isinstance(shape, PenStroke):
