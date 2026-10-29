@@ -235,6 +235,7 @@ class Overlay(QWidget):
         self.toolbar = Toolbar(self)
         self.toolbar.hide()
         self.toolbar.tool_selected.connect(self.set_tool)
+        self.toolbar.shapes_toggled.connect(self._place_toolbar)
         self.toolbar.undo.connect(self.undo)
         self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)

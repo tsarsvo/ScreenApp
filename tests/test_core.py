@@ -1498,3 +1498,30 @@ def test_emoji_popup_reopens_after_search_and_pick(qapp):
         "Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Activities",
         "Travel & Places", "Objects", "Symbols", "Flags"]
     o.close()
+
+
+def test_shape_tools_fold_into_one_button_and_expand_on_click(qapp):
+    """Фигуры по умолчанию свёрнуты в одну кнопку; клик раскрывает их, выбор фигуры сворачивает список."""
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    tb = o.toolbar
+    shape_btns = [tb._tool_buttons[t] for t in tb.SHAPE_TOOLS]
+    assert not tb._shape_box.isVisible() and tb._shape_toggle.isVisible()
+    assert not any(b.isVisible() for b in shape_btns)
+    width_folded = tb.width()
+
+    tb._shape_toggle.click()
+    assert tb._shape_box.isVisible() and all(b.isVisible() for b in shape_btns)
+    assert tb.width() > width_folded
+
+    tb._shape_toggle.click()
+    assert not tb._shape_box.isVisible()
+
+    tb._shape_toggle.click()
+    tb._tool_buttons[Tool.ELLIPSE].click()
+    assert o._tool == Tool.ELLIPSE
+    assert not tb._shape_box.isVisible()
+    assert tb._shape_toggle.isChecked() and tb.width() == width_folded
+    o.close()
