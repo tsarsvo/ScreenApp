@@ -213,6 +213,9 @@ class Toolbar(Panel):
         [(Tool.PIXELATE, "pixelate", "Скрыть: пикселизация  (B)")],
     ]
     TOOLS = [t for group in TOOL_GROUPS for t in group]
+    # Фигуры прячутся за одной кнопкой: панель короче, а выбрать фигуру — один клик на кнопку и один на фигуру
+    SHAPE_TOOLS = (Tool.MARKER, Tool.LINE, Tool.ARROW, Tool.RECT, Tool.ELLIPSE)
+    shapes_toggled = Signal()   # панель стала длиннее или короче — оверлей переставит её
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -222,8 +225,23 @@ class Toolbar(Panel):
 
         self._buttons: list = []
         self._tool_buttons: dict[Tool, IconButton] = {}
+        self._icon_of: dict[Tool, str] = {}
+        self._t: Tokens | None = None
         group = QButtonGroup(self)
         group.setExclusive(True)
+
+        self._shape_box = QWidget(self)
+        shapes = QHBoxLayout(self._shape_box)
+        shapes.setContentsMargins(0, 0, 0, 0)
+        shapes.setSpacing(2)
+        self._shape_box.hide()
+        self._shape_toggle = IconButton("rect", "Фигуры: маркер, линия, стрелка, прямоугольник, овал  (клик — раскрыть)",
+                                        self, checkable=True)
+        self._shape_toggle.clicked.connect(self._on_shape_toggle)
+        self._shape_toggle.hide()
+        self._shapes_open = False
+        self._current = Tool.SELECT
+
         for i, tools in enumerate(self.TOOL_GROUPS):
             if i:
                 row.addWidget(self._sep())
@@ -232,7 +250,15 @@ class Toolbar(Panel):
                 b.clicked.connect(lambda _=False, t=tool: self.tool_selected.emit(t))
                 group.addButton(b)
                 self._tool_buttons[tool] = b
-                row.addWidget(b)
+                self._icon_of[tool] = name
+                if tool in self.SHAPE_TOOLS:
+                    if shapes.count() == 0:
+                        row.addWidget(self._shape_toggle)
+                        self._shape_toggle.show()
+                        row.addWidget(self._shape_box)
+                    shapes.addWidget(b)
+                else:
+                    row.addWidget(b)
 
         row.addWidget(self._sep())
         self.style_btn = StyleButton(self)
@@ -252,8 +278,29 @@ class Toolbar(Panel):
         row.addSpacing(3)
         self._action("close", "Закрыть  (Esc)", self.cancel, row)
 
-        self._buttons += list(self._tool_buttons.values())
+        self._buttons += list(self._tool_buttons.values()) + [self._shape_toggle]
+        self._sync_shape_toggle(Tool.RECT)
         self.adjustSize()
+
+    def _on_shape_toggle(self) -> None:
+        self._set_shapes_open(not self._shapes_open)
+        self._shape_toggle.setChecked(self._current in self.SHAPE_TOOLS)
+
+    def _set_shapes_open(self, on: bool) -> None:
+        if on == self._shapes_open:
+            return
+        self._shapes_open = on
+        self._shape_box.setVisible(on)
+        self.adjustSize()
+        self.shapes_toggled.emit()
+
+    def _sync_shape_toggle(self, tool: Tool) -> None:
+        """Кнопка фигур показывает последнюю выбранную фигуру (по умолчанию прямоугольник)."""
+        if tool not in self.SHAPE_TOOLS:
+            return
+        self._shape_toggle.icon_name = self._icon_of[tool]
+        if self._t:
+            self._shape_toggle.apply_theme(self._t)
 
     def _action(self, name, tip, signal, row) -> IconButton:
         b = IconButton(name, tip, self)
@@ -271,6 +318,7 @@ class Toolbar(Panel):
 
     def apply_theme(self, t: Tokens) -> None:
         super().apply_theme(t)
+        self._t = t
         accent = QColor(t.accent)
         self.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 8px; background: transparent; }}
@@ -285,6 +333,11 @@ class Toolbar(Panel):
 
     def set_tool(self, tool: Tool) -> None:
         self._tool_buttons[tool].setChecked(True)
+        self._current = tool
+        self._shape_toggle.setChecked(tool in self.SHAPE_TOOLS)
+        if tool in self.SHAPE_TOOLS:
+            self._sync_shape_toggle(tool)
+            self._set_shapes_open(False)            # выбрали фигуру — список сворачиваем
 
     def set_history_state(self, can_undo: bool, can_redo: bool) -> None:
         self.undo_btn.setEnabled(can_undo)
@@ -405,6 +458,9 @@ class StylePopup(Panel):
         row.setSpacing(8)
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
         self.slider.setRange(1, 40)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(4)
+        self.slider.setMinimumWidth(160)
         self.slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.slider.valueChanged.connect(self._on_slider)
         self.value = QLabel("4", self)
@@ -528,10 +584,11 @@ class StylePopup(Panel):
                          border-radius: 7px; padding: 4px 6px; font-family: monospace; font-size: 12px;
                          selection-background-color: {t.accent}; }}
             QLineEdit:focus {{ border-color: {t.accent}; }}
-            QSlider::groove:horizontal {{ height: 4px; background: {t.border}; border-radius: 2px; }}
-            QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 2px; }}
-            QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
-                                          background: {t.surface}; border: 1px solid {t.border}; }}
+            QSlider::groove:horizontal {{ height: 6px; background: {t.border}; border-radius: 3px; }}
+            QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 3px; }}
+            QSlider::handle:horizontal {{ width: 22px; height: 22px; margin: -8px 0; border-radius: 11px;
+                                          background: {t.surface}; border: 2px solid {t.accent}; }}
+            QSlider::handle:horizontal:hover {{ background: {t.hover}; }}
         """)
 
 
@@ -610,6 +667,8 @@ class EmojiPopup(Panel):
         g = QGridLayout(w)
         g.setContentsMargins(0, 0, 0, 0)
         g.setSpacing(0)
+        # Ячейки держат свой размер и прижаты влево-вверх, иначе лишняя ширина делит сетку по центру
+        g.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         for i, ch in enumerate(chars):
             b = EmojiButton(ch, w)
             b.clicked.connect(lambda _=False, c=ch: self.choose(c))

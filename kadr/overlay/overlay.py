@@ -57,6 +57,7 @@ _EDITABLE = {Tool.SELECT: (RectShape, EllipseShape, ArrowShape, LineShape, TextS
 _LINEAR = (ArrowShape, LineShape)        # правятся за концы, а не за рамку
 _BOXED = (RectShape, PixelateShape, PenStroke)    # правятся за рамку: стороны и углы
 NUDGE = 1                # стрелки на клавиатуре двигают фигуру на столько px (с Shift — в 10 раз больше)
+ROTATE_GAP = 22          # ручка поворота эмодзи — над рамкой, на этом расстоянии (px)
 HOVER_HINT_TEXT = "Del — удалить  ·  стрелки — сдвинуть"
 _ARROW_KEYS = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0), Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1)}
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW, Qt.Key.Key_L: Tool.LINE,
@@ -80,6 +81,28 @@ def _segment_distance(a: QPointF, b: QPointF, pt: QPointF) -> float:
 def _text_box(shape: TextShape) -> QRectF:
     """Рамка текста, за которую его берут и у углов которой — точки размера."""
     return shape.bounds_text().adjusted(-4, -2, 4, 2)
+
+
+def _emoji_handles(shape: EmojiShape) -> list[tuple[str, QPointF]]:
+    """Четыре угла повёрнутой рамки эмодзи и ручка поворота над верхней серединой (последней)."""
+    c = shape.bounds_text().center()
+    half = shape.side() / 2
+    a = math.radians(shape.angle)
+    cos, sin = math.cos(a), math.sin(a)
+
+    def at(lx: float, ly: float) -> QPointF:
+        return QPointF(c.x() + lx * cos - ly * sin, c.y() + lx * sin + ly * cos)
+
+    corners = [(hid, at((fx * 2 - 1) * half, (fy * 2 - 1) * half)) for hid, fx, fy in _HANDLES if len(hid) == 2]
+    return corners + [("rot", at(0, -half - ROTATE_GAP))]
+
+
+def _emoji_top_mid(shape: EmojiShape) -> QPointF:
+    """Верхняя середина рамки эмодзи — от неё тянется «палочка» к ручке поворота."""
+    c = shape.bounds_text().center()
+    half = shape.side() / 2
+    a = math.radians(shape.angle)
+    return QPointF(c.x() + half * math.sin(a), c.y() - half * math.cos(a))
 
 
 def _stroke_box(shape: PenStroke) -> QRectF:
@@ -235,6 +258,7 @@ class Overlay(QWidget):
         self.toolbar = Toolbar(self)
         self.toolbar.hide()
         self.toolbar.tool_selected.connect(self.set_tool)
+        self.toolbar.shapes_toggled.connect(self._place_toolbar)
         self.toolbar.undo.connect(self.undo)
         self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)
@@ -584,6 +608,8 @@ class Overlay(QWidget):
             return []
         if isinstance(shape, _LINEAR):
             return [("p1", QPointF(shape.start)), ("p2", QPointF(shape.end))]
+        if isinstance(shape, EmojiShape):
+            return _emoji_handles(shape)
         if isinstance(shape, TextShape):              # у текста — четыре угла: размер шрифта
             r = _text_box(shape)
             return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height()))
@@ -699,8 +725,12 @@ class Overlay(QWidget):
                 self._history.push_move(s, old, s.pos)
         else:
             old = geometry(s)
-            moved = (tuple(pt + d for pt in old[0]),) if isinstance(s, PenStroke) else (old[0] + d, old[1] + d) \
-                if not isinstance(s, TextShape) else (old[0] + d, old[1])
+            if isinstance(s, PenStroke):
+                moved = (tuple(pt + d for pt in old[0]),)
+            elif isinstance(s, TextShape):
+                moved = (old[0] + d, *old[1:])            # размер и поворот не меняются
+            else:
+                moved = (old[0] + d, old[1] + d)
             set_geometry(s, moved)
             self._history.push_geom(s, old, geometry(s))
         self._invalidate_layer(area.united(QRectF(self._shape_rect(s))))
@@ -1045,7 +1075,10 @@ class Overlay(QWidget):
     def _edit_text(self, d: QPointF) -> None:
         """Текст: за рамку — перенос, за угол — размер шрифта (противоположный угол на месте)."""
         shape, h = self._edit_shape, self._edit_handle
-        pos0, size0 = self._edit_from
+        pos0, size0 = self._edit_from[:2]
+        if isinstance(shape, EmojiShape) and h != "move":
+            self._edit_emoji(shape, h, d)
+            return
         if h == "move":
             shape.pos = pos0 + d
             return
@@ -1060,6 +1093,33 @@ class Overlay(QWidget):
         box = shape.bounds_text()
         shape.pos = QPointF(box0.right() - box.width() if "l" in h else box0.left(),
                             box0.bottom() - box.height() if "t" in h else box0.top())
+
+    def _edit_emoji(self, shape: EmojiShape, h: str, d: QPointF) -> None:
+        """Эмодзи: угол — размер (противоположный угол на месте, в повёрнутой рамке);
+        ручка поворота — угол от центра к курсору."""
+        set_geometry(shape, self._edit_from)
+        size0, side0 = shape.font_px(), shape.side()
+        c0 = shape.bounds_text().center()
+        a = math.radians(shape.angle)
+        cos, sin = math.cos(a), math.sin(a)
+        if h == "rot":
+            pt = QPointF(self._press) + d
+            shape.angle = math.degrees(math.atan2(pt.y() - c0.y(), pt.x() - c0.x())) + 90
+            return
+        sx, sy = (1 if "r" in h else -1), (1 if "b" in h else -1)
+        # движение мыши — в осях самого эмодзи
+        lx = d.x() * cos + d.y() * sin
+        ly = -d.x() * sin + d.y() * cos
+        k = max((side0 + sx * lx) / side0, (side0 + sy * ly) / side0)
+        size = min(TEXT_MAX_PX, max(TEXT_MIN_PX, size0 * k))
+        side = size * 1.25
+        # противоположный угол остаётся на месте
+        ux, uy = sx * side0 / 2, sy * side0 / 2
+        anchor = QPointF(c0.x() - (ux * cos - uy * sin), c0.y() - (ux * sin + uy * cos))
+        vx, vy = sx * side / 2, sy * side / 2
+        center = QPointF(anchor.x() + vx * cos - vy * sin, anchor.y() + vx * sin + vy * cos)
+        shape.size = size
+        shape.pos = QPointF(center.x() - side / 2, center.y() - side / 2)
 
     @staticmethod
     def _constrain_square(a, b):
@@ -1422,7 +1482,7 @@ class Overlay(QWidget):
         p.drawRect(QRectF(self._sel).adjusted(-0.5, -0.5, 0.5, 0.5))
         if self._mode in ("drawing",):
             return
-        p.setBrush(QColor("#FFFFFF"))
+        p.setBrush(accent)                     # ручки выделения — цветом акцента, как рамка
         for _hid, pt in self._handle_points():
             p.drawEllipse(pt, HANDLE_R, HANDLE_R)
 
@@ -1437,7 +1497,14 @@ class Overlay(QWidget):
         color.setAlpha(255)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if isinstance(s, TextShape):                   # у текста видна рамка, за которую его берут
+        if isinstance(s, EmojiShape):                  # у эмодзи — повёрнутая рамка, за которую его берут
+            pen = QPen(color, 1, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPolygon(QPolygonF([pt for hid, pt in _emoji_handles(s) if hid != "rot"]))
+            p.drawLine(_emoji_top_mid(s), _emoji_handles(s)[-1][1])
+        elif isinstance(s, TextShape):                 # у текста видна рамка, за которую его берут
             pen = QPen(color, 1, Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             p.setPen(pen)

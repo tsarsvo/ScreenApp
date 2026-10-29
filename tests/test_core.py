@@ -1496,5 +1496,56 @@ def test_emoji_popup_reopens_after_search_and_pick(qapp):
     assert emoji_data.search("kiss")                                  # английские названия из Unicode
     assert [name for name, _icon, _items in emoji_data.CATEGORIES] == [
         "Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Activities",
-        "Travel & Places", "Objects", "Symbols", "Flags"]
+        "Travel & Places", "Objects", "Symbols"]  # без флагов: на Windows они видны буквами
+    o.close()
+
+
+def test_shape_tools_fold_into_one_button_and_expand_on_click(qapp):
+    """Фигуры по умолчанию свёрнуты в одну кнопку; клик раскрывает их, выбор фигуры сворачивает список."""
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    tb = o.toolbar
+    shape_btns = [tb._tool_buttons[t] for t in tb.SHAPE_TOOLS]
+    assert not tb._shape_box.isVisible() and tb._shape_toggle.isVisible()
+    assert not any(b.isVisible() for b in shape_btns)
+    width_folded = tb.width()
+
+    tb._shape_toggle.click()
+    assert tb._shape_box.isVisible() and all(b.isVisible() for b in shape_btns)
+    assert tb.width() > width_folded
+
+    tb._shape_toggle.click()
+    assert not tb._shape_box.isVisible()
+
+    tb._shape_toggle.click()
+    tb._tool_buttons[Tool.ELLIPSE].click()
+    assert o._tool == Tool.ELLIPSE
+    assert not tb._shape_box.isVisible()
+    assert tb._shape_toggle.isChecked() and tb.width() == width_folded
+    o.close()
+
+
+def test_emoji_rotates_with_handle_and_undo_restores_angle(qapp):
+    """Эмодзи поворачивают за ручку над рамкой: центр на месте, Ctrl+Z возвращает угол."""
+    from kadr.overlay.overlay import _emoji_handles
+    from kadr.overlay.shapes import EmojiShape, Tool
+
+    o = _overlay(qapp, 800, 600)
+    _drag(o, (100, 100), (500, 400))
+    QTest.keyClick(o, Qt.Key.Key_J)
+    o.emoji_popup.choose("🔥")
+    _click(o, 300, 250)
+    em = o._history.shapes[-1]
+    assert isinstance(em, EmojiShape) and em.angle == 0
+    o.set_tool(Tool.SELECT)
+    center0 = em.bounds_text().center()
+    rot = _emoji_handles(em)[-1][1]                      # ручка поворота — последняя
+    QTest.mouseMove(o, rot.toPoint())
+    _drag(o, (round(rot.x()), round(rot.y())), (round(center0.x()) + 200, round(center0.y())))
+    assert abs(em.angle - 90) < 2                        # курсор справа от центра → поворот на 90°
+    assert (em.bounds_text().center() - center0).manhattanLength() < 1e-6
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert abs(em.angle) < 1e-6
     o.close()
