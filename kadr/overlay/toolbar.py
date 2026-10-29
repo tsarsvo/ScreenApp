@@ -6,15 +6,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QSlider, QToolButton, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QScrollArea, QSlider, QToolButton, QVBoxLayout, QWidget)
 
 from .. import icons
 from ..config import DEFAULT_PALETTE
 from ..theme import Tokens
 from ..ui.color_picker import ColorField, HueBar
-from .shapes import Tool
+from . import emoji_data
+from .shapes import EMOJI_FONTS, Tool
 
 SHADOW = 10          # поле под мягкую тень вокруг панели
 RADIUS = 12
@@ -122,6 +123,30 @@ class IconButton(QToolButton):
         self.setIcon(ic)
 
 
+class PrimaryButton(QToolButton):
+    """Главное действие панели — «Копировать»: заливка цветом акцента и подпись, чтобы не искать глазами."""
+
+    def __init__(self, icon_name: str, text: str, tip: str, parent=None) -> None:
+        super().__init__(parent)
+        self.icon_name = icon_name
+        self.setText(text)
+        self.setToolTip(tip)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.setIconSize(QSize(18, 18))
+        self.setFixedHeight(34)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def apply_theme(self, t: Tokens) -> None:
+        self.setIcon(icons.icon(self.icon_name, t.accent_text))
+        self.setStyleSheet(f"""
+            QToolButton {{ background: {t.accent}; color: {t.accent_text}; border: none; border-radius: 8px;
+                           padding: 0 12px 0 9px; font-size: 13px; font-weight: 600; }}
+            QToolButton:hover {{ background: {QColor(t.accent).lighter(110).name()}; }}
+            QToolButton:pressed {{ background: {QColor(t.accent).darker(110).name()}; }}
+        """)
+
+
 class StyleButton(QAbstractButton):
     """Кнопка «цвет/толщина»: кружок текущего цвета, размер кружка ~ толщине."""
 
@@ -175,18 +200,21 @@ class Toolbar(Panel):
     cancel = Signal()  # не `close` — иначе затеним QWidget.close()
     style_clicked = Signal()
 
-    TOOLS = [
-        (Tool.SELECT, "cursor", "Выделение и перемещение  (V)"),
-        (Tool.PEN, "pen", "Кисть  (P)"),
-        (Tool.ARROW, "arrow", "Стрелка  (A)"),
-        (Tool.LINE, "line", "Линия  (L) · Shift — под 45°"),
-        (Tool.RECT, "rect", "Прямоугольник  (R)"),
-        (Tool.ELLIPSE, "ellipse", "Овал  (E)"),
-        (Tool.TEXT, "text", "Текст  (T)"),
-        (Tool.MARKER, "highlighter", "Маркер  (M) · Shift — ровная линия"),
-        (Tool.PIXELATE, "pixelate", "Скрыть: пикселизация  (B)"),
-        (Tool.STEP, "step", "Нумерованные шаги  (N)"),
+    # Инструменты по смыслу: выбрать | рисовать | подписать | скрыть
+    TOOL_GROUPS = [
+        [(Tool.SELECT, "cursor", "Выделение и перемещение  (V)")],
+        [(Tool.PEN, "pen", "Кисть  (P)"),
+         (Tool.MARKER, "highlighter", "Маркер  (M) · Shift — ровная линия"),
+         (Tool.LINE, "line", "Линия  (L) · Shift — под 45°"),
+         (Tool.ARROW, "arrow", "Стрелка  (A)"),
+         (Tool.RECT, "rect", "Прямоугольник  (R)"),
+         (Tool.ELLIPSE, "ellipse", "Овал  (E)")],
+        [(Tool.TEXT, "text", "Текст  (T)"),
+         (Tool.EMOJI, "emoji", "Эмодзи  (J)"),
+         (Tool.STEP, "step", "Нумерованные шаги  (N) · можно ставить и за рамкой")],
+        [(Tool.PIXELATE, "pixelate", "Скрыть: пикселизация  (B)")],
     ]
+    TOOLS = [t for group in TOOL_GROUPS for t in group]
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -198,13 +226,17 @@ class Toolbar(Panel):
         self._tool_buttons: dict[Tool, IconButton] = {}
         group = QButtonGroup(self)
         group.setExclusive(True)
-        for tool, name, tip in self.TOOLS:
-            b = IconButton(name, tip, self, checkable=True)
-            b.clicked.connect(lambda _=False, t=tool: self.tool_selected.emit(t))
-            group.addButton(b)
-            self._tool_buttons[tool] = b
-            row.addWidget(b)
+        for i, tools in enumerate(self.TOOL_GROUPS):
+            if i:
+                row.addWidget(self._sep())
+            for tool, name, tip in tools:
+                b = IconButton(name, tip, self, checkable=True)
+                b.clicked.connect(lambda _=False, t=tool: self.tool_selected.emit(t))
+                group.addButton(b)
+                self._tool_buttons[tool] = b
+                row.addWidget(b)
 
+        row.addWidget(self._sep())
         self.style_btn = StyleButton(self)
         self.style_btn.clicked.connect(self.style_clicked)
         row.addWidget(self.style_btn)
@@ -214,9 +246,12 @@ class Toolbar(Panel):
         self.redo_btn = self._action("redo", "Вперёд  (Ctrl+Y)", self.redo, row)
         row.addWidget(self._sep())
         self._action("pin", "Закрепить поверх окон  (Ctrl+T)", self.pin, row)
-        self._action("copy", "Скопировать в буфер  (Ctrl+C / Enter)", self.copy, row)
         self._action("save", "Сохранить в папку  (Ctrl+S)", self.save, row)
-        row.addWidget(self._sep())
+        self.copy_btn = PrimaryButton("copy", "Копировать", "Скопировать в буфер  (Ctrl+C / Enter)", self)
+        self.copy_btn.clicked.connect(self.copy)
+        row.addSpacing(3)
+        row.addWidget(self.copy_btn)
+        row.addSpacing(3)
         self._action("close", "Закрыть  (Esc)", self.cancel, row)
 
         self._buttons += list(self._tool_buttons.values())
@@ -247,6 +282,7 @@ class Toolbar(Panel):
         """)
         for b in self._buttons:
             b.apply_theme(t)
+        self.copy_btn.apply_theme(t)
         self.style_btn.apply_theme(t)
 
     def set_tool(self, tool: Tool) -> None:
@@ -499,3 +535,227 @@ class StylePopup(Panel):
             QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
                                           background: {t.surface}; border: 1px solid {t.border}; }}
         """)
+
+
+EMOJI_COLS = 8
+EMOJI_CELL = 36
+EMOJI_RECENT_MAX = 16
+
+
+class EmojiButton(QToolButton):
+    def __init__(self, char: str, parent=None) -> None:
+        super().__init__(parent)
+        self.char = char
+        self.setText(char)
+        f = QFont()
+        f.setFamilies(EMOJI_FONTS)
+        f.setPixelSize(22)
+        self.setFont(f)
+        self.setFixedSize(EMOJI_CELL, EMOJI_CELL)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+
+class EmojiPopup(Panel):
+    """Панель выбора эмодзи, как быстрая панель Discord: поиск сверху, «часто используемые»,
+    категории (кнопки-вкладки прокручивают список). Поиск — по русским и английским словам."""
+
+    chosen = Signal(str)
+    recent_changed = Signal(list)
+
+    def __init__(self, parent: QWidget, recent: list[str] | None = None) -> None:
+        super().__init__(parent)
+        self._recent: list[str] = list(recent or [])[:EMOJI_RECENT_MAX]
+        self._built = False
+        self._anchors: dict[str, QWidget] = {}
+        col = QVBoxLayout(self)
+        col.setContentsMargins(SHADOW + 10, SHADOW + 10, SHADOW + 10, SHADOW + 10)
+        col.setSpacing(8)
+
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText("Поиск: огонь, кот, fire…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._on_search)
+        self.search.installEventFilter(self)
+        col.addWidget(self.search)
+
+        self.tabs = QHBoxLayout()
+        self.tabs.setSpacing(2)
+        col.addLayout(self.tabs)
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setFixedSize(EMOJI_COLS * EMOJI_CELL + 14, 6 * EMOJI_CELL)
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        col.addWidget(self.scroll)
+
+        self.status = QLabel("", self)
+        self.status.setObjectName("Hint")
+        col.addWidget(self.status)
+        self.setFixedWidth(self.scroll.width() + 2 * (SHADOW + 10))
+        self.adjustSize()
+        self.hide()
+
+    # --- содержимое: собирается при первом показе, а не при создании оверлея ------------------
+    def _grid(self, chars: list[str]) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setSpacing(0)
+        for i, ch in enumerate(chars):
+            b = EmojiButton(ch, w)
+            b.clicked.connect(lambda _=False, c=ch: self.choose(c))
+            b.setToolTip(self._name(ch))
+            g.addWidget(b, i // EMOJI_COLS, i % EMOJI_COLS)
+        return w
+
+    @staticmethod
+    def _name(ch: str) -> str:
+        words = next((kw for c, kw in emoji_data.ALL if c == ch), "")
+        return words.split()[0] if words else ""
+
+    def _header(self, text: str) -> QLabel:
+        lab = QLabel(text, self)
+        lab.setObjectName("Section")
+        return lab
+
+    def _build(self) -> None:
+        self._built = True
+        self._browse = QWidget()
+        lay = QVBoxLayout(self._browse)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.setSpacing(2)
+        self._recent_box = QVBoxLayout()
+        lay.addLayout(self._recent_box)
+        self._fill_recent()
+        for name, icon, items in emoji_data.CATEGORIES:
+            head = self._header(CATEGORY_TITLES[name])
+            lay.addWidget(head)
+            lay.addWidget(self._grid([e.partition("|")[0] for e in items]))
+            self._anchors[name] = head
+            tab = QToolButton(self)
+            tab.setText(icon)
+            tab.setToolTip(CATEGORY_TITLES[name])
+            tab.setFixedSize(30, 28)
+            tab.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            f = QFont()
+            f.setFamilies(EMOJI_FONTS)
+            f.setPixelSize(16)
+            tab.setFont(f)
+            tab.clicked.connect(lambda _=False, n=name: self._jump(n))
+            self.tabs.addWidget(tab)
+        self.tabs.addStretch(1)
+        lay.addStretch(1)
+        self.scroll.setWidget(self._browse)
+
+    def _fill_recent(self) -> None:
+        while self._recent_box.count():
+            item = self._recent_box.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        chars = self._recent or emoji_data.QUICK
+        self._recent_box.addWidget(self._header("Часто используемые" if self._recent else "Популярные"))
+        self._recent_box.addWidget(self._grid(chars))
+
+    def _jump(self, name: str) -> None:
+        self.search.clear()
+        self.scroll.setWidget(self._browse)
+        self.scroll.verticalScrollBar().setValue(self._anchors[name].y())
+
+    # --- поиск ---------------------------------------------------------------------------------
+    def _on_search(self, text: str) -> None:
+        if not self._built:
+            return
+        if not text.strip():
+            self.scroll.setWidget(self._browse)
+            self.status.setText("")
+            return
+        found = emoji_data.search(text)
+        if not found:
+            self.status.setText("Ничего не найдено")
+            box = QLabel("Попробуйте другое слово", self)
+            box.setObjectName("Hint")
+            box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.scroll.setWidget(box)
+            return
+        self.status.setText(f"Найдено: {len(found)}")
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.addWidget(self._grid(found))
+        lay.addStretch(1)                       # сетка прижата к верху, а не растянута на всю высоту
+        self.scroll.setWidget(box)
+
+    def eventFilter(self, obj, e) -> bool:
+        # Enter в поиске выбирает первый найденный; Esc закрывает панель, а не оверлей
+        if obj is self.search and e.type() == e.Type.KeyPress:
+            if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                found = emoji_data.search(self.search.text())
+                if found:
+                    self.choose(found[0])
+                return True
+            if e.key() == Qt.Key.Key_Escape:
+                self.close_popup()
+                return True
+        return super().eventFilter(obj, e)
+
+    def close_popup(self) -> None:
+        self.hide()
+        if self.parentWidget():
+            self.parentWidget().setFocus()      # горячие клавиши снова у оверлея
+
+    # --- выбор ---------------------------------------------------------------------------------
+    def choose(self, char: str) -> None:
+        self._recent = [char] + [c for c in self._recent if c != char]
+        self._recent = self._recent[:EMOJI_RECENT_MAX]
+        self.recent_changed.emit(list(self._recent))
+        self.close_popup()
+        self.chosen.emit(char)
+
+    def set_recent(self, recent: list[str]) -> None:
+        self._recent = list(recent)[:EMOJI_RECENT_MAX]
+        if self._built:
+            self._fill_recent()
+
+    def open_fresh(self) -> None:
+        if not self._built:
+            self._build()
+        else:
+            self._fill_recent()
+        self.search.clear()
+        self.scroll.setWidget(self._browse)
+        self.scroll.verticalScrollBar().setValue(0)
+        self.status.setText("")
+        self.layout().activate()
+        self.adjustSize()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self.search.setFocus()
+
+    def apply_theme(self, t: Tokens) -> None:
+        super().apply_theme(t)
+        accent = QColor(t.accent)
+        self.setStyleSheet(f"""
+            QLabel {{ color: {t.muted}; font-size: 11px; background: transparent; }}
+            QLabel#Section {{ font-weight: 600; padding: 6px 2px 2px 2px; }}
+            QToolButton {{ border: none; border-radius: 8px; background: transparent; color: {t.text}; }}
+            QToolButton:hover {{ background: {t.hover}; }}
+            QLineEdit {{ background: {t.raised}; color: {t.text}; border: 1px solid {t.border};
+                         border-radius: 8px; padding: 6px 8px; font-size: 13px;
+                         selection-background-color: {t.accent}; }}
+            QLineEdit:focus {{ border-color: rgba({accent.red()},{accent.green()},{accent.blue()},0.8); }}
+            QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 8px; background: transparent; margin: 2px; }}
+            QScrollBar::handle:vertical {{ background: {t.border}; border-radius: 3px; min-height: 24px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+
+
+CATEGORY_TITLES = {
+    "smileys": "Смайлы", "people": "Люди и жесты", "nature": "Природа", "food": "Еда и напитки",
+    "activity": "Активности", "travel": "Путешествия", "objects": "Предметы", "symbols": "Символы",
+}

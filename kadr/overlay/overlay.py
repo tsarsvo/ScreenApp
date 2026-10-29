@@ -15,7 +15,7 @@ import sys
 
 from PySide6.QtCore import QEasingCurve, QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QKeyEvent, QKeySequence,
-                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTransform, QWheelEvent)
+                           QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion, QTransform, QWheelEvent)
 from PySide6.QtWidgets import QWidget
 
 from .. import foreground
@@ -23,10 +23,10 @@ from ..capture import ScreenShot
 from ..hotkeys import _MAC_VK
 from ..theme import Tokens
 from .history import History
-from .shapes import (ArrowShape, EllipseShape, LineShape, MarkerStroke, PenStroke, PixelateShape, RectShape, Shape, StepShape,
-                     TEXT_MAX_PX, TEXT_MIN_PX, TextShape, Tool, TwoPointShape, font_px_for_width, geometry,
-                     marker_width, set_geometry)
-from .toolbar import SHADOW, StylePopup, Toolbar
+from .shapes import (ArrowShape, EllipseShape, EmojiShape, LineShape, MarkerStroke, PenStroke, PixelateShape, RectShape,
+                     Shape, StepShape, TEXT_MAX_PX, TEXT_MIN_PX, TextShape, Tool, TwoPointShape, font_px_for_width,
+                     geometry, marker_width, set_geometry)
+from .toolbar import SHADOW, EmojiPopup, StylePopup, Toolbar
 
 DIM_ALPHA = 115          # непрозрачность затемнения (из 255) — примерно 45%
 HANDLE_R = 4.0           # радиус «ручки» изменения размера
@@ -49,14 +49,20 @@ _HANDLE_CURSORS = {
     "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
 }
 # Какие готовые фигуры можно двигать, тянуть и удалять (Del) при каком инструменте
-_EDITABLE = {Tool.SELECT: (RectShape, EllipseShape, ArrowShape, LineShape, TextShape), Tool.RECT: (RectShape,),
-             Tool.ELLIPSE: (EllipseShape,), Tool.ARROW: (ArrowShape,), Tool.LINE: (LineShape,),
-             Tool.TEXT: (TextShape,)}
+# Кисть и маркер правятся только инструментом «Выделение»: иначе нельзя было бы вести кистью рядом
+# со старым штрихом (например, подчёркивать выделенное маркером).
+_EDITABLE = {Tool.SELECT: (RectShape, EllipseShape, ArrowShape, LineShape, TextShape, PenStroke, PixelateShape),
+             Tool.RECT: (RectShape,), Tool.ELLIPSE: (EllipseShape,), Tool.ARROW: (ArrowShape,), Tool.LINE: (LineShape,),
+             Tool.TEXT: (TextShape,), Tool.EMOJI: (EmojiShape,), Tool.PIXELATE: (PixelateShape,)}
 _LINEAR = (ArrowShape, LineShape)        # правятся за концы, а не за рамку
-HOVER_HINT_TEXT = "Del — удалить"
+_BOXED = (RectShape, PixelateShape, PenStroke)    # правятся за рамку: стороны и углы
+NUDGE = 1                # стрелки на клавиатуре двигают фигуру на столько px (с Shift — в 10 раз больше)
+HOVER_HINT_TEXT = "Del — удалить  ·  стрелки — сдвинуть"
+_ARROW_KEYS = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0), Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1)}
 _TOOL_KEYS = {Qt.Key.Key_V: Tool.SELECT, Qt.Key.Key_P: Tool.PEN, Qt.Key.Key_A: Tool.ARROW, Qt.Key.Key_L: Tool.LINE,
               Qt.Key.Key_R: Tool.RECT, Qt.Key.Key_E: Tool.ELLIPSE, Qt.Key.Key_T: Tool.TEXT,
-              Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP}
+              Qt.Key.Key_M: Tool.MARKER, Qt.Key.Key_B: Tool.PIXELATE, Qt.Key.Key_N: Tool.STEP,
+              Qt.Key.Key_J: Tool.EMOJI}
 
 
 def _edit_cursor(handle: str) -> Qt.CursorShape:
@@ -76,6 +82,11 @@ def _text_box(shape: TextShape) -> QRectF:
     return shape.bounds_text().adjusted(-4, -2, 4, 2)
 
 
+def _stroke_box(shape: PenStroke) -> QRectF:
+    """Рамка штриха по его точкам (без запаса на толщину) — за её стороны и углы штрих растягивают."""
+    return QPolygonF(shape.points).boundingRect()
+
+
 def _outline_distance(shape, pt: QPointF) -> float:
     """Расстояние от точки до контура фигуры (у стрелки и линии — до отрезка);
     текст берётся за любое место внутри рамки."""
@@ -85,6 +96,13 @@ def _outline_distance(shape, pt: QPointF) -> float:
                           max(r.top() - pt.y(), 0.0, pt.y() - r.bottom()))
     if isinstance(shape, _LINEAR):
         return _segment_distance(shape.start, shape.end, pt)
+    if isinstance(shape, PenStroke):
+        pts = shape.points
+        if not pts or not _stroke_box(shape).adjusted(-shape.width, -shape.width, shape.width, shape.width).contains(pt):
+            return math.inf       # далеко от штриха — по отрезкам не идём (их могут быть тысячи)
+        if len(pts) == 1:
+            return QLineF(pts[0], pt).length()
+        return min(_segment_distance(a, b, pt) for a, b in zip(pts, pts[1:], strict=False))
     r = shape.rect()
     if isinstance(shape, EllipseShape) and r.width() >= 2 and r.height() >= 2:
         a, b = r.width() / 2, r.height() / 2
@@ -142,10 +160,11 @@ class Overlay(QWidget):
     cancelled = Signal()
     style_changed = Signal(QColor, int)
     palette_changed = Signal(list)
+    emoji_recent_changed = Signal(list)
     pin_requested = Signal(QImage, QPoint, float)   # снимок, левый верхний угол на экране, DPR
 
     def __init__(self, shot: ScreenShot, tokens: Tokens, color: QColor, width: int,
-                 palette: list[str] | None = None) -> None:
+                 palette: list[str] | None = None, emoji_recent: list[str] | None = None) -> None:
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         if sys.platform != "darwin":
             flags |= Qt.WindowType.Tool  # не показывать в панели задач
@@ -179,7 +198,9 @@ class Overlay(QWidget):
         self._edit_shape: TwoPointShape | TextShape | None = None
         self._edit_handle = ""            # move или ручка: tl | t | tr | …
         self._edit_from: tuple = ()             # shapes.geometry() в начале перетаскивания
-        self._hover_shape: TwoPointShape | None = None   # у неё видны ручки
+        self._hover_shape: Shape | None = None   # у неё видны ручки
+        self._picked: Shape | None = None        # фигура, за которую взялись мышью: ручки и Del остаются за ней
+        self._emoji = (emoji_recent or ["👍"])[0]  # какой эмодзи ставит инструмент «Эмодзи»
         # Зажатый пробел во время выделения: рамка едет за мышью, размер не меняется
         self._space = False
         # Подсказка «Del — удалить», если курсор задержался на контуре фигуры
@@ -229,6 +250,10 @@ class Overlay(QWidget):
         self.popup.pick_requested.connect(self.start_picking)
         self.popup.resized.connect(lambda: self._place_popup(animate=False))
 
+        self.emoji_popup = EmojiPopup(self, emoji_recent)
+        self.emoji_popup.chosen.connect(self._emoji_chosen)
+        self.emoji_popup.recent_changed.connect(self.emoji_recent_changed)
+
         # Пипетка: берём цвет прямо со снимка экрана
         self._picking = False
         self._shot_image: QImage | None = None
@@ -270,6 +295,7 @@ class Overlay(QWidget):
         self._t = t
         self.toolbar.apply_theme(t)
         self.popup.apply_theme(t)
+        self.emoji_popup.apply_theme(t)
         self.update()
 
     def reset_selection(self) -> None:
@@ -280,10 +306,11 @@ class Overlay(QWidget):
         self._layer = None
         self._layer_valid = False
         self._mode = "idle"
-        self._hover_shape = None
+        self._hover_shape = self._picked = None
         self._hide_hover_hint()
         self.toolbar.hide()
         self.popup.hide()
+        self.emoji_popup.hide()
         self.update()
 
     def select_all(self) -> None:
@@ -296,21 +323,60 @@ class Overlay(QWidget):
         self._place_toolbar()
         self.update()
 
+    def _outside_step(self, shape: Shape) -> bool:
+        """Номер шага, вынесенный за рамку выделения: он попадает в файл целиком."""
+        return (isinstance(shape, StepShape) and self._sel is not None
+                and not QRectF(self._sel).adjusted(0, 0, 1, 1).contains(shape.pos))
+
+    def export_rect(self) -> QRect:
+        """Что войдёт в файл: выделение, а если номера шагов вынесены за рамку — выделение плюс поля,
+        на которых они стоят (в пределах экрана)."""
+        sel = self._sel or self.rect()
+        r = QRect(sel)
+        for s in self._history.shapes:
+            if self._outside_step(s):
+                r = r.united(s.bounds().toAlignedRect())
+        return r.intersected(self.rect())
+
     def render_selection(self) -> QImage:
         """Вырезает выделенную область в физических пикселях и рисует на ней фигуры."""
         self._commit_text()
         sel = self._sel or self.rect()
+        ext = self.export_rect()
         dpr = self._shot.dpr
-        src = QRect(round(sel.x() * dpr), round(sel.y() * dpr),
-                    max(1, round(sel.width() * dpr)), max(1, round(sel.height() * dpr)))
-        img = self._shot.pixmap.copy(src).toImage().convertToFormat(QImage.Format.Format_RGB32)
-        img.setDevicePixelRatio(1.0)
+
+        def phys(r: QRect) -> QRect:
+            return QRect(round(r.x() * dpr), round(r.y() * dpr),
+                         max(1, round(r.width() * dpr)), max(1, round(r.height() * dpr)))
+
+        src = phys(sel)
+        if ext == sel:
+            img = self._shot.pixmap.copy(src).toImage().convertToFormat(QImage.Format.Format_RGB32)
+            img.setDevicePixelRatio(1.0)
+            full = QRect(sel)
+        else:
+            # Есть номера за рамкой: холст шире выделения, поля белые, а скриншот лежит на своём месте
+            full = phys(ext)
+            img = QImage(full.size(), QImage.Format.Format_RGB32)
+            img.fill(QColor("#FFFFFF"))
+            part = self._shot.pixmap.copy(src).toImage()
+            part.setDevicePixelRatio(1.0)
+            q = QPainter(img)
+            q.drawImage(round((sel.x() - ext.x()) * dpr), round((sel.y() - ext.y()) * dpr), part)
+            q.end()
+            full = QRect(ext)
         p = QPainter(img)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
-        p.scale(src.width() / sel.width(), src.height() / sel.height())
-        p.translate(-sel.topLeft())
+        p.scale(img.width() / full.width(), img.height() / full.height())
+        p.translate(-full.topLeft())
         for s in self._history.shapes:
-            s.paint(p)
+            if ext == sel or self._outside_step(s):
+                s.paint(p)
+            else:
+                p.save()
+                p.setClipRect(QRectF(sel))       # на белые поля попадают только номера
+                s.paint(p)
+                p.restore()
         p.end()
         return img
 
@@ -320,7 +386,22 @@ class Overlay(QWidget):
         self._tool = tool
         self.toolbar.set_tool(tool)
         self.popup.hide()
+        self.emoji_popup.hide()
+        if tool == Tool.EMOJI and self._sel is not None:
+            self._open_emoji_popup()
         self._update_cursor(self._mouse)
+
+    def _open_emoji_popup(self) -> None:
+        self.emoji_popup.open_fresh()
+        self._place_popup(self.emoji_popup, self.toolbar._tool_buttons[Tool.EMOJI])
+
+    def _emoji_chosen(self, char: str) -> None:
+        self._emoji = char
+        self.setFocus()
+        self.update()
+
+    def set_emoji_recent(self, recent: list) -> None:
+        self.emoji_popup.set_recent(recent)
 
     def _set_color(self, color: QColor) -> None:
         self._color = QColor(color)
@@ -406,24 +487,27 @@ class Overlay(QWidget):
 
     def _pin(self) -> None:
         if self._sel is not None:
-            self.pin_requested.emit(self.render_selection(), self.mapToGlobal(self._sel.topLeft()), self._shot.dpr)
+            self.pin_requested.emit(self.render_selection(), self.mapToGlobal(self.export_rect().topLeft()), self._shot.dpr)
 
     def _toggle_popup(self) -> None:
+        self.emoji_popup.hide()
         if self.popup.isVisible():
             self.popup.hide()
             return
         self._place_popup()
 
-    def _place_popup(self, animate: bool = True) -> None:
-        self.popup.layout().activate()
-        self.popup.adjustSize()
+    def _place_popup(self, popup=None, anchor=None, animate: bool = True) -> None:
+        popup = popup or self.popup
+        anchor = anchor or self.toolbar.style_btn
+        popup.layout().activate()
+        popup.adjustSize()
         tb = self.toolbar.geometry()
-        btn = self.toolbar.style_btn.geometry().translated(tb.topLeft())
-        x = btn.center().x() - self.popup.width() // 2
-        x = max(-SHADOW + 4, min(x, self.width() - self.popup.width() + SHADOW - 4))
+        btn = anchor.geometry().translated(tb.topLeft())
+        x = btn.center().x() - popup.width() // 2
+        x = max(-SHADOW + 4, min(x, self.width() - popup.width() + SHADOW - 4))
         below = tb.bottom() - SHADOW + GAP - SHADOW
-        above = tb.top() + SHADOW - GAP - self.popup.height() + SHADOW
-        fits_below = below + self.popup.height() - SHADOW <= self.height()
+        above = tb.top() + SHADOW - GAP - popup.height() + SHADOW
+        fits_below = below + popup.height() - SHADOW <= self.height()
         # Открываем в сторону «от выделения», чтобы не закрывать скриншот
         toolbar_above_sel = self._sel is not None and tb.center().y() < self._sel.center().y()
         if fits_below and not (toolbar_above_sel and above >= -SHADOW):
@@ -431,11 +515,11 @@ class Overlay(QWidget):
         else:
             pos, offset = QPoint(x, above), QPoint(0, 6)
         # Раскрытый выбор цвета высокий — не даём панели уйти за край экрана
-        pos.setY(max(-SHADOW + 4, min(pos.y(), self.height() - self.popup.height() + SHADOW - 4)))
-        if animate or not self.popup.isVisible():
-            self.popup.appear_at(pos, offset)
+        pos.setY(max(-SHADOW + 4, min(pos.y(), self.height() - popup.height() + SHADOW - 4)))
+        if animate or not popup.isVisible():
+            popup.appear_at(pos, offset)
         else:
-            self.popup.move_now(pos)
+            popup.move_now(pos)
 
     # ------------------------------------------------------------- пипетка
     def _source_image(self) -> QImage:
@@ -504,8 +588,8 @@ class Overlay(QWidget):
             r = _text_box(shape)
             return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height()))
                     for hid, fx, fy in _HANDLES if len(hid) == 2]
-        r = shape.rect()
-        handles = _HANDLES if isinstance(shape, RectShape) else [h for h in _HANDLES if len(h[0]) == 1]
+        r = _stroke_box(shape) if isinstance(shape, PenStroke) else shape.rect()
+        handles = _HANDLES if isinstance(shape, _BOXED) else [h for h in _HANDLES if len(h[0]) == 1]
         return [(hid, QPointF(r.left() + fx * r.width(), r.top() + fy * r.height())) for hid, fx, fy in handles]
 
     def _has_shape(self, shape: Shape | None) -> bool:
@@ -584,6 +668,31 @@ class Overlay(QWidget):
         self.update()
         return True
 
+    def _nudge(self, direction: tuple[int, int], big: bool) -> bool:
+        """Стрелки на клавиатуре двигают активную фигуру (под курсором или взятую мышью) на 1 px,
+        с Shift — на 10: так её можно поставить точно. Ctrl+Z возвращает на место."""
+        s = self._hover_shape
+        if self._mode != "idle" or not self._has_shape(s):
+            return False
+        k = NUDGE * (10 if big else 1)
+        d = QPointF(direction[0] * k, direction[1] * k)
+        area = QRectF(self._shape_rect(s))
+        if isinstance(s, StepShape):
+            old = QPointF(s.pos)
+            s.pos = QPointF(min(max(old.x() + d.x(), 0), self.width()), min(max(old.y() + d.y(), 0), self.height()))
+            if s.pos != old:
+                self._history.push_move(s, old, s.pos)
+        else:
+            old = geometry(s)
+            moved = (tuple(pt + d for pt in old[0]),) if isinstance(s, PenStroke) else (old[0] + d, old[1] + d) \
+                if not isinstance(s, TextShape) else (old[0] + d, old[1])
+            set_geometry(s, moved)
+            self._history.push_geom(s, old, geometry(s))
+        self._invalidate_layer(area.united(QRectF(self._shape_rect(s))))
+        self._sync_toolbar()
+        self.update()
+        return True
+
     def _place_toolbar(self) -> None:
         """Панель рядом с выделением, не перекрывая его: снизу → сверху → внутри (крайний случай)."""
         if self._sel is None:
@@ -612,6 +721,8 @@ class Overlay(QWidget):
             self._place_popup()   # показываем панель снова — с выбранным цветом
             return
         self.popup.hide()
+        if self.emoji_popup.isVisible():
+            self.emoji_popup.close_popup()
         if e.button() == Qt.MouseButton.RightButton:
             # ПКМ: сбросить выделение, а если его нет — закрыть оверлей
             if self._sel is not None and not self._history and not self._editing:
@@ -634,6 +745,8 @@ class Overlay(QWidget):
         elif step:
             # взяли нумерованный шаг — тащим его; слой собирается без него
             self._hide_hover_hint()
+            self._picked = step
+            self._set_hover_shape(step)
             self._mode, self._drag_step = "dragging", step
             self._drag_from = QPointF(step.pos)
             self._drag_offset = step.pos - QPointF(e.position())
@@ -642,6 +755,7 @@ class Overlay(QWidget):
         elif edit:
             # взяли прямоугольник / овал за контур (перенос) или за ручку (размер)
             shape, hid = edit
+            self._picked = shape
             self._mode, self._edit_shape, self._edit_handle = "editing", shape, hid
             self._edit_from = geometry(shape)
             self._set_hover_shape(shape)
@@ -649,18 +763,22 @@ class Overlay(QWidget):
             self._hide_hover_hint()
             self.setCursor(Qt.CursorShape.ClosedHandCursor if hid == "move" else _edit_cursor(hid))
         elif self._sel is not None and self._tool != Tool.SELECT and (
-                self._sel.contains(pos) or self._tool not in (Tool.TEXT, Tool.STEP)):
+                self._sel.contains(pos) or self._tool not in (Tool.TEXT, Tool.EMOJI)):
             # Линию, стрелку, рамку, кисть можно начать и за выделением (например, стрелку
-            # «с края»); в снимок попадает только часть внутри рамки. Текст и номер шага
-            # за рамкой были бы невидимы — их ставим только внутри.
+            # «с края»); в снимок попадает только часть внутри рамки. Текст и эмодзи за рамкой
+            # были бы невидимы — их ставим только внутри. Номер шага можно вынести за рамку:
+            # тогда файл получит белые поля, на которых он стоит.
+            self._picked = None
             self._start_drawing(QPointF(e.position()))
         elif self._sel is not None and self._sel.contains(pos):
+            self._picked = None
             self._mode, self._sel_origin = "moving", QRect(self._sel)
             self._set_hover_shape(None)
             self.toolbar.hide()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         elif self._sel is None or (self._tool == Tool.SELECT and not self._history):
             # Новое выделение (если на старом ещё ничего не нарисовано)
+            self._picked = None
             self._mode = "selecting"
             self._sel = QRect(pos, QSize(0, 0))
             self.toolbar.hide()
@@ -675,6 +793,11 @@ class Overlay(QWidget):
 
         if self._picking:
             self.update()
+            return
+        if self._mode != "idle" and not e.buttons() & Qt.MouseButton.LeftButton:
+            # Отпускание кнопки потерялось (окно потеряло фокус, отпустили над другим окном):
+            # завершаем перетаскивание, иначе рамка «прилипает» к курсору, а на экране не обновляется
+            self._end_drag(QPointF(e.position()), shift)
             return
         old_sel = QRect(self._sel) if self._sel is not None else None
         if self._mode == "selecting":
@@ -697,8 +820,7 @@ class Overlay(QWidget):
         elif self._mode == "dragging" and self._drag_step:
             before = self._drag_step.bounds()
             c = QPointF(e.position()) + self._drag_offset
-            s = self._sel
-            # центр шага остаётся внутри выделения, иначе номер пропадёт из файла
+            s = self.rect()      # шаг можно вынести за рамку, но не за экран
             self._drag_step.pos = QPointF(min(max(c.x(), s.left()), s.right()),
                                           min(max(c.y(), s.top()), s.bottom()))
             self._update_shape_area(before)
@@ -711,7 +833,10 @@ class Overlay(QWidget):
         else:
             edit = self._editable_at(pos) if self._mode == "idle" else None
             # под курсором фигура или номер шага — их можно удалить по Del
-            self._set_hover_shape(edit[0] if edit else self._step_at(pos) if self._mode == "idle" else None)
+            target = edit[0] if edit else self._step_at(pos) if self._mode == "idle" else None
+            if target is None and self._mode == "idle" and self._has_shape(self._picked):
+                target = self._picked        # взятая мышью фигура остаётся «активной»: ручки и Del
+            self._set_hover_shape(target)
             self._update_cursor(pos)
             self._update_hover(old_mouse)
             return
@@ -721,6 +846,9 @@ class Overlay(QWidget):
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         if e.button() != Qt.MouseButton.LeftButton:
             return
+        self._end_drag(e.position(), bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+
+    def _end_drag(self, pos: QPointF, shift: bool) -> None:
         mode, self._mode = self._mode, "idle"
         self._space = False
         if mode == "selecting":
@@ -736,8 +864,7 @@ class Overlay(QWidget):
                 self._sel = QRect(self._sel_origin)
             self._place_toolbar()
         elif mode == "drawing" and self._current:
-            shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            self._continue_drawing(QPointF(e.position()), shift)
+            self._continue_drawing(pos, shift)
             cur, self._current = self._current, None
             if not cur.is_empty():
                 self._push_shape(cur)
@@ -758,7 +885,7 @@ class Overlay(QWidget):
                 self._history.push_geom(shape, self._edit_from, new)
                 self._sync_toolbar()
             self._invalidate_layer(QRectF(self._shape_rect(shape)))   # фигура возвращается в слой
-        self._update_cursor(e.position().toPoint())
+        self._update_cursor(pos.toPoint())
         self.update()
 
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
@@ -837,6 +964,9 @@ class Overlay(QWidget):
         if isinstance(self._edit_shape, TextShape):
             self._edit_text(d)
             return
+        if isinstance(self._edit_shape, PenStroke):
+            self._edit_stroke(d)
+            return
         shape, (a, b) = self._edit_shape, self._edit_from
         if self._edit_handle == "move":
             shape.start, shape.end = a + d, b + d
@@ -864,6 +994,32 @@ class Overlay(QWidget):
             bottom += d.y()
         r = QRectF(QPointF(left, top), QPointF(right, bottom)).normalized()
         shape.start, shape.end = r.topLeft(), r.bottomRight()
+
+    def _edit_stroke(self, d: QPointF) -> None:
+        """Кисть и маркер: за штрих — перенос, за ручку рамки — масштаб всех точек относительно
+        противоположной стороны."""
+        shape, h = self._edit_shape, self._edit_handle
+        pts = self._edit_from[0]
+        if h == "move":
+            shape.points = [pt + d for pt in pts]
+            return
+        box = QPolygonF(list(pts)).boundingRect()
+        left, top, right, bottom = box.left(), box.top(), box.right(), box.bottom()
+        if "l" in h:
+            left += d.x()
+        if "r" in h:
+            right += d.x()
+        if "t" in h:
+            top += d.y()
+        if "b" in h:
+            bottom += d.y()
+        new = QRectF(QPointF(left, top), QPointF(right, bottom)).normalized()
+        # нулевая ширина или высота (ровная линия) не масштабируется — только сдвигается
+        kx = new.width() / box.width() if box.width() >= 1 else 1.0
+        ky = new.height() / box.height() if box.height() >= 1 else 1.0
+        shape.points = [QPointF(new.left() + (pt.x() - box.left()) * kx if box.width() >= 1 else pt.x() + new.left() - box.left(),
+                                new.top() + (pt.y() - box.top()) * ky if box.height() >= 1 else pt.y() + new.top() - box.top())
+                        for pt in pts]
 
     def _edit_text(self, d: QPointF) -> None:
         """Текст: за рамку — перенос, за угол — размер шрифта (противоположный угол на месте)."""
@@ -1009,6 +1165,18 @@ class Overlay(QWidget):
             self._caret_on = True
             self._caret_timer.start()
             return
+        if self._tool == Tool.EMOJI:
+            # эмодзи ставится одним кликом — по центру курсора; дальше его можно двигать и менять размер
+            size = max(28, round(font_px_for_width(w) * 1.8))
+            probe = EmojiShape(c, w, pos=QPointF(), text=self._emoji, size=size)
+            side = probe.bounds_text().width()
+            probe.pos = pos - QPointF(side / 2, side / 2)
+            self._push_shape(probe)
+            self._picked = probe
+            self._set_hover_shape(probe)
+            self._sync_toolbar()
+            self.update(self._selection_area(self._sel))
+            return
         self._mode = "drawing"
         self._set_hover_shape(None)
         self.update(self._selection_area(self._sel))   # ручки выделения прячутся на время рисования
@@ -1034,8 +1202,8 @@ class Overlay(QWidget):
             if QLineF(cur.points[-1], pos).length() >= 1.0:
                 cur.points.append(pos)
         elif isinstance(cur, StepShape):
-            # номер можно перетащить, пока кнопка зажата — но не за рамку, иначе его не будет в файле
-            s = self._sel
+            # номер можно перетащить, пока кнопка зажата; за рамкой он останется на белых полях файла
+            s = self.rect()
             cur.pos = QPointF(min(max(pos.x(), s.left()), s.right()), min(max(pos.y(), s.top()), s.bottom()))
         elif isinstance(cur, TwoPointShape):
             if shift and isinstance(cur, (ArrowShape, LineShape)):
@@ -1093,6 +1261,8 @@ class Overlay(QWidget):
                 self._place_popup()
             return
         if e.key() == Qt.Key.Key_Delete and self._delete_hovered():
+            return
+        if (arrow := _ARROW_KEYS.get(e.key())) and not ctrl and self._nudge(arrow, shift):
             return
         if e.key() == Qt.Key.Key_Escape:
             if self.popup.isVisible():
@@ -1203,6 +1373,10 @@ class Overlay(QWidget):
                 self._paint_text_editor(p)
             p.restore()
 
+        # Номера шагов за рамкой попадут в файл целиком (на белых полях) — рисуем их без затемнения
+        for step in (*self._history.shapes, self._current):
+            if step is not None and self._outside_step(step):
+                step.paint(p)
         self._paint_frame(p)
         self._paint_shape_handles(p)
         if self._hover_hint_at is not None and self._mode == "idle" and self._has_shape(self._hover_shape):

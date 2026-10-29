@@ -304,8 +304,10 @@ class KadrApp(QObject):
             self.notify("Не удалось сделать снимок экрана", error=True)
             return
         s = self.store.data
-        self.session = CaptureSession(shots, self.theme.tokens, QColor(s.pen_color), s.pen_width, s.palette)
+        self.session = CaptureSession(shots, self.theme.tokens, QColor(s.pen_color), s.pen_width, s.palette,
+                                      s.emoji_recent)
         self.session.palette_changed.connect(lambda pal: self.store.set("palette", list(pal)))
+        self.session.emoji_recent_changed.connect(lambda rec: self.store.set("emoji_recent", list(rec)))
         self.session.copy_requested.connect(self._copy)
         self.session.pin_requested.connect(self.pin_image)
         self.session.save_requested.connect(self._save)
