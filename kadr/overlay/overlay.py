@@ -258,9 +258,6 @@ class Overlay(QWidget):
         self.toolbar = Toolbar(self)
         self.toolbar.hide()
         self.toolbar.tool_selected.connect(self.set_tool)
-        self.toolbar.shapes_toggled.connect(self._place_toolbar)
-        self.toolbar.undo.connect(self.undo)
-        self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)
         self.toolbar.save.connect(self._save)
         self.toolbar.pin.connect(self._pin)
@@ -450,7 +447,6 @@ class Overlay(QWidget):
 
     def _sync_toolbar(self) -> None:
         self.toolbar.set_style(self._color, self._width)
-        self.toolbar.set_history_state(self._history.can_undo(), self._history.can_redo())
         self.popup.set_style(self._color, self._width)
 
     # ------------------------------------------------------------------ undo
