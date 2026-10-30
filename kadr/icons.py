@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 _HEAD = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
@@ -147,17 +147,3 @@ def logo_icon(mono: bool = False) -> QIcon:
 
 def logo_image(size: int) -> QImage:
     return _render(LOGO_SVG, size, 1.0).toImage()
-
-
-def color_swatch(color: QColor | str, size: int = 14) -> QIcon:
-    """Кружок цвета — для кнопки выбора цвета."""
-    px = QPixmap(size * 2, size * 2)
-    px.fill(Qt.GlobalColor.transparent)
-    p = QPainter(px)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QColor(0, 0, 0, 60))
-    p.setBrush(QColor(color))
-    p.drawEllipse(1, 1, px.width() - 2, px.height() - 2)
-    p.end()
-    px.setDevicePixelRatio(2)
-    return QIcon(px)

@@ -210,7 +210,6 @@ class Toolbar(Panel):
          (Tool.STEP, "step", "Нумерованные шаги  (N) · можно ставить и за рамкой")],
         [(Tool.PIXELATE, "pixelate", "Скрыть: пикселизация  (B)")],
     ]
-    TOOLS = [t for group in TOOL_GROUPS for t in group]
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)

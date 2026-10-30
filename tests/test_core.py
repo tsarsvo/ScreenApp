@@ -1561,3 +1561,28 @@ def test_step_ghost_shows_next_number_at_cursor(qapp):
     o._mouse = QPoint(300, 250)                          # на готовом шаге призрака нет
     assert o._step_ghost() is None
     o.close()
+
+
+def test_step_numbers_stay_consecutive_through_delete_and_undo(qapp):
+    """Удаление шага сдвигает номера, Ctrl+Z возвращает и номера, и сам шаг."""
+    from kadr.overlay.shapes import StepShape, Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.STEP)
+    for x, y in ((150, 150), (250, 150), (350, 150)):
+        _click(o, x, y)
+    steps = [s for s in o._history.shapes if isinstance(s, StepShape)]
+    assert [s.number for s in steps] == [1, 2, 3]
+    o.set_tool(Tool.SELECT)
+    o._mouse = QPoint(150, 150)
+    o._hover_shape = steps[0]
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert [s.number for s in steps[1:]] == [1, 2]
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert steps[0] in o._history.shapes
+    assert [s.number for s in steps] == [1, 2, 3]
+    o.set_tool(Tool.STEP)
+    o._mouse = QPoint(450, 350)                           # свободное место, не на шаге
+    assert o._step_ghost().number == 4
+    o.close()
