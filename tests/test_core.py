@@ -1543,3 +1543,21 @@ def test_emoji_rotates_with_handle_and_undo_restores_angle(qapp):
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert abs(em.angle) < 1e-6
     o.close()
+
+
+def test_step_ghost_shows_next_number_at_cursor(qapp):
+    """Пока выбраны номера, у курсора виден призрак следующей цифры; на готовом шаге призрака нет."""
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.STEP)
+    o._mouse = QPoint(300, 250)
+    assert o._step_ghost() is not None and o._step_ghost().number == 1
+    _click(o, 300, 250)
+    _click(o, 200, 200)
+    o._mouse = QPoint(200, 150)
+    assert o._step_ghost().number == 3
+    o._mouse = QPoint(300, 250)                          # на готовом шаге призрака нет
+    assert o._step_ghost() is None
+    o.close()
