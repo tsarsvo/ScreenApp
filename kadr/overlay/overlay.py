@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import sys
 
@@ -350,54 +351,38 @@ class Overlay(QWidget):
                 and not QRectF(self._sel).adjusted(0, 0, 1, 1).contains(shape.pos))
 
     def export_rect(self) -> QRect:
-        """Что войдёт в файл: выделение, а если номера шагов вынесены за рамку — выделение плюс поля,
-        на которых они стоят (в пределах экрана)."""
-        sel = self._sel or self.rect()
-        r = QRect(sel)
-        for s in self._history.shapes:
-            if self._outside_step(s):
-                r = r.united(s.bounds().toAlignedRect())
-        return r.intersected(self.rect())
+        """Что войдёт в файл: всегда выделение. Номер, поставленный за рамку, в файл не расширяет
+        снимок — он встаёт на край выделения (см. _on_edge)."""
+        return QRect(self._sel or self.rect())
+
+    @staticmethod
+    def _on_edge(step: StepShape, sel: QRect) -> StepShape:
+        """Копия номера, придвинутая внутрь выделения: кружок касается края, но целиком в файле."""
+        r = step.radius()
+        inner = QRectF(sel).adjusted(r, r, -r, -r)
+        x = min(max(step.pos.x(), inner.left()), inner.right())
+        y = min(max(step.pos.y(), inner.top()), inner.bottom())
+        return dataclasses.replace(step, pos=QPointF(x, y))
 
     def render_selection(self) -> QImage:
         """Вырезает выделенную область в физических пикселях и рисует на ней фигуры."""
         self._commit_text()
         sel = self._sel or self.rect()
-        ext = self.export_rect()
         dpr = self._shot.dpr
-
-        def phys(r: QRect) -> QRect:
-            return QRect(round(r.x() * dpr), round(r.y() * dpr),
-                         max(1, round(r.width() * dpr)), max(1, round(r.height() * dpr)))
-
-        src = phys(sel)
-        if ext == sel:
-            img = self._shot.pixmap.copy(src).toImage().convertToFormat(QImage.Format.Format_RGB32)
-            img.setDevicePixelRatio(1.0)
-            full = QRect(sel)
-        else:
-            # Есть номера за рамкой: холст шире выделения, поля белые, а скриншот лежит на своём месте
-            full = phys(ext)
-            img = QImage(full.size(), QImage.Format.Format_RGB32)
-            img.fill(QColor("#FFFFFF"))
-            part = self._shot.pixmap.copy(src).toImage()
-            part.setDevicePixelRatio(1.0)
-            q = QPainter(img)
-            q.drawImage(round((sel.x() - ext.x()) * dpr), round((sel.y() - ext.y()) * dpr), part)
-            q.end()
-            full = QRect(ext)
+        img = self._shot.pixmap.copy(QRect(round(sel.x() * dpr), round(sel.y() * dpr),
+                                           max(1, round(sel.width() * dpr)),
+                                           max(1, round(sel.height() * dpr)))).toImage()
+        img = img.convertToFormat(QImage.Format.Format_RGB32)
+        img.setDevicePixelRatio(1.0)
         p = QPainter(img)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
-        p.scale(img.width() / full.width(), img.height() / full.height())
-        p.translate(-full.topLeft())
+        p.scale(img.width() / sel.width(), img.height() / sel.height())
+        p.translate(-sel.topLeft())
         for s in self._history.shapes:
-            if ext == sel or self._outside_step(s):
-                s.paint(p)
-            else:
-                p.save()
-                p.setClipRect(QRectF(sel))       # на белые поля попадают только номера
-                s.paint(p)
-                p.restore()
+            p.save()
+            p.setClipRect(QRectF(sel))
+            (self._on_edge(s, sel) if self._outside_step(s) else s).paint(p)
+            p.restore()
         p.end()
         return img
 
