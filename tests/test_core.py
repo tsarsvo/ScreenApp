@@ -1259,29 +1259,25 @@ def _click(o, x, y):
     QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
 
 
-def test_steps_outside_selection_extend_export_with_white_margin(qapp):
+def test_steps_outside_selection_do_not_grow_export(qapp):
+    """Номер за рамкой не расширяет файл: снимок остаётся размером с выделение, а номер встаёт на край."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (300, 250))
     sel = QRect(o._sel)
     o.set_tool(Tool.STEP)
-    _click(o, 200, 150)                                  # внутри — как раньше, поля не нужны
-    assert o.export_rect() == sel
-    assert o.render_selection().width() == sel.width() * 2
+    _click(o, 200, 150)                                  # внутри
     _click(o, 60, 175)                                   # слева от рамки
-    ext = o.export_rect()
-    assert ext.left() < sel.left() and ext.right() == sel.right() and ext.top() == sel.top()
+    assert o.export_rect() == sel
     img = o.render_selection()
-    assert (img.width(), img.height()) == (ext.width() * 2, ext.height() * 2)
-    margin = (sel.left() - ext.left()) * 2
-    assert img.pixelColor(2, img.height() - 3) == QColor("white")              # поле белое, не чужой экран
-    assert img.pixelColor(margin + 40, 40) == QColor("white")                  # скриншот на своём месте (он белый)
+    assert (img.width(), img.height()) == (sel.width() * 2, sel.height() * 2)
     step = o._history.shapes[-1]
-    assert img.pixelColor(round((60 - ext.x()) * 2), round((175 - ext.y()) * 2)) != QColor("white")
-    o.pin_requested.connect(lambda *_: None)
-    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert o.export_rect() == sel and step not in o._history.shapes
+    r = step.radius()
+    # кружок придвинут к левому краю: его центр — в r от края, на той же высоте
+    cy = round((175 - sel.top()) * 2)
+    assert img.pixelColor(round(r * 2 - r * 0.8), cy) == QColor("#FF3B30")  # красный кружок, не цифра
+    assert step.pos.x() == 60                            # в истории номер стоит там, куда его поставили
     o.close()
 
 
