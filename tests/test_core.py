@@ -1500,30 +1500,24 @@ def test_emoji_popup_reopens_after_search_and_pick(qapp):
     o.close()
 
 
-def test_shape_tools_fold_into_one_button_and_expand_on_click(qapp):
-    """Фигуры по умолчанию свёрнуты в одну кнопку; клик раскрывает их, выбор фигуры сворачивает список."""
+def test_all_shape_buttons_visible_and_no_undo_redo_buttons(qapp):
+    """Стрелка, овал и остальные фигуры видны на панели сразу; кнопок «назад» и «вперёд» нет,
+    а горячие клавиши Ctrl+Z / Ctrl+Y работают."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (500, 400))
     tb = o.toolbar
-    shape_btns = [tb._tool_buttons[t] for t in tb.SHAPE_TOOLS]
-    assert not tb._shape_box.isVisible() and tb._shape_toggle.isVisible()
-    assert not any(b.isVisible() for b in shape_btns)
-    width_folded = tb.width()
-
-    tb._shape_toggle.click()
-    assert tb._shape_box.isVisible() and all(b.isVisible() for b in shape_btns)
-    assert tb.width() > width_folded
-
-    tb._shape_toggle.click()
-    assert not tb._shape_box.isVisible()
-
-    tb._shape_toggle.click()
-    tb._tool_buttons[Tool.ELLIPSE].click()
-    assert o._tool == Tool.ELLIPSE
-    assert not tb._shape_box.isVisible()
-    assert tb._shape_toggle.isChecked() and tb.width() == width_folded
+    for tool in (Tool.MARKER, Tool.LINE, Tool.ARROW, Tool.RECT, Tool.ELLIPSE):
+        assert tb._tool_buttons[tool].isVisible(), tool
+    assert not hasattr(tb, "undo_btn") and not hasattr(tb, "redo_btn")
+    QTest.keyClick(o, Qt.Key.Key_R)
+    _drag(o, (120, 120), (200, 200))
+    n = len(o._history.shapes)
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert len(o._history.shapes) == n - 1
+    QTest.keyClick(o, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert len(o._history.shapes) == n
     o.close()
 
 
@@ -1548,4 +1542,47 @@ def test_emoji_rotates_with_handle_and_undo_restores_angle(qapp):
     assert (em.bounds_text().center() - center0).manhattanLength() < 1e-6
     QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     assert abs(em.angle) < 1e-6
+    o.close()
+
+
+def test_step_ghost_shows_next_number_at_cursor(qapp):
+    """Пока выбраны номера, у курсора виден призрак следующей цифры; на готовом шаге призрака нет."""
+    from kadr.overlay.shapes import Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.STEP)
+    o._mouse = QPoint(300, 250)
+    assert o._step_ghost() is not None and o._step_ghost().number == 1
+    _click(o, 300, 250)
+    _click(o, 200, 200)
+    o._mouse = QPoint(200, 150)
+    assert o._step_ghost().number == 3
+    o._mouse = QPoint(300, 250)                          # на готовом шаге призрака нет
+    assert o._step_ghost() is None
+    o.close()
+
+
+def test_step_numbers_stay_consecutive_through_delete_and_undo(qapp):
+    """Удаление шага сдвигает номера, Ctrl+Z возвращает и номера, и сам шаг."""
+    from kadr.overlay.shapes import StepShape, Tool
+
+    o = _overlay(qapp)
+    _drag(o, (100, 100), (500, 400))
+    o.set_tool(Tool.STEP)
+    for x, y in ((150, 150), (250, 150), (350, 150)):
+        _click(o, x, y)
+    steps = [s for s in o._history.shapes if isinstance(s, StepShape)]
+    assert [s.number for s in steps] == [1, 2, 3]
+    o.set_tool(Tool.SELECT)
+    o._mouse = QPoint(150, 150)
+    o._hover_shape = steps[0]
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert [s.number for s in steps[1:]] == [1, 2]
+    QTest.keyClick(o, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert steps[0] in o._history.shapes
+    assert [s.number for s in steps] == [1, 2, 3]
+    o.set_tool(Tool.STEP)
+    o._mouse = QPoint(450, 350)                           # свободное место, не на шаге
+    assert o._step_ghost().number == 4
     o.close()

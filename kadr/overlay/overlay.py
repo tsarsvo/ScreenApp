@@ -258,9 +258,6 @@ class Overlay(QWidget):
         self.toolbar = Toolbar(self)
         self.toolbar.hide()
         self.toolbar.tool_selected.connect(self.set_tool)
-        self.toolbar.shapes_toggled.connect(self._place_toolbar)
-        self.toolbar.undo.connect(self.undo)
-        self.toolbar.redo.connect(self.redo)
         self.toolbar.copy.connect(self._copy)
         self.toolbar.save.connect(self._save)
         self.toolbar.pin.connect(self._pin)
@@ -450,7 +447,6 @@ class Overlay(QWidget):
 
     def _sync_toolbar(self) -> None:
         self.toolbar.set_style(self._color, self._width)
-        self.toolbar.set_history_state(self._history.can_undo(), self._history.can_redo())
         self.popup.set_style(self._color, self._width)
 
     # ------------------------------------------------------------------ undo
@@ -836,6 +832,9 @@ class Overlay(QWidget):
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
         pos = e.position().toPoint()
         old_mouse, self._mouse = self._mouse, pos
+        if self._tool == Tool.STEP:                      # призрак следующего номера движется за курсором
+            self.update(self._step_ghost_rect(old_mouse))
+            self.update(self._step_ghost_rect(pos))
         shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         bounds = self.rect()
 
@@ -1271,7 +1270,7 @@ class Overlay(QWidget):
             self._current = PixelateShape(c, w, start=pos, end=pos, source=self._source_image(), dpr=self._shot.dpr)
         elif self._tool == Tool.STEP:
             # номер = количество шагов на снимке + 1 (после Ctrl+Z нумерация продолжается верно)
-            number = sum(isinstance(s, StepShape) for s in self._history.shapes) + 1
+            number = self._next_step_number()
             self._current = StepShape(c, w, pos=pos, number=number)
         else:
             cls = {Tool.ARROW: ArrowShape, Tool.LINE: LineShape, Tool.RECT: RectShape, Tool.ELLIPSE: EllipseShape}[self._tool]
@@ -1463,6 +1462,7 @@ class Overlay(QWidget):
         for step in (*self._history.shapes, self._current):
             if step is not None and self._outside_step(step):
                 step.paint(p)
+        self._paint_step_ghost(p)
         self._paint_frame(p)
         self._paint_shape_handles(p)
         if self._hover_hint_at is not None and self._mode == "idle" and self._has_shape(self._hover_shape):
@@ -1472,6 +1472,32 @@ class Overlay(QWidget):
             self._paint_width_hint(p)
         if self._picking:
             self._paint_loupe(p)
+
+    def _next_step_number(self) -> int:
+        """Номер, который получит следующий шаг: сплошная нумерация 1, 2, 3…"""
+        return sum(isinstance(s, StepShape) for s in self._history.shapes) + 1
+
+    def _step_ghost(self) -> StepShape | None:
+        """Полупрозрачный следующий номер у курсора — видно, какой цифрой встанет шаг. Не показывается,
+        когда курсор на готовом шаге, во время рисования и при выбранной пипетке."""
+        if (self._tool != Tool.STEP or self._mode != "idle" or self._picking or self._sel is None
+                or self._mouse == QPoint(-100, -100) or self._step_at(self._mouse) is not None):
+            return None
+        return StepShape(QColor(self._color), self._width, pos=QPointF(self._mouse),
+                         number=self._next_step_number())
+
+    def _step_ghost_rect(self, pos: QPoint) -> QRect:
+        ghost = StepShape(QColor(self._color), self._width, pos=QPointF(pos), number=1)
+        return self._shape_rect(ghost)
+
+    def _paint_step_ghost(self, p: QPainter) -> None:
+        ghost = self._step_ghost()
+        if ghost is None:
+            return
+        p.save()
+        p.setOpacity(0.5)
+        ghost.paint(p)
+        p.restore()
 
     def _paint_frame(self, p: QPainter) -> None:
         accent = self._t.q("accent")
