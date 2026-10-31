@@ -1259,25 +1259,23 @@ def _click(o, x, y):
     QTest.mouseClick(o, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
 
 
-def test_steps_outside_selection_do_not_grow_export(qapp):
-    """Номер за рамкой не расширяет файл: снимок остаётся размером с выделение, а номер встаёт на край."""
+def test_steps_outside_selection_stay_outside_and_do_not_grow_export(qapp):
+    """Как эмодзи: номер можно вынести за рамку, но в файл он не попадает и снимок не растягивается."""
     from kadr.overlay.shapes import Tool
 
     o = _overlay(qapp)
     _drag(o, (100, 100), (300, 250))
     sel = QRect(o._sel)
     o.set_tool(Tool.STEP)
-    _click(o, 200, 150)                                  # внутри
-    _click(o, 60, 175)                                   # слева от рамки
+    _click(o, 200, 150)                                  # внутри — попадает в файл
+    _click(o, 60, 175)                                   # слева от рамки — за пределами файла
     assert o.export_rect() == sel
     img = o.render_selection()
     assert (img.width(), img.height()) == (sel.width() * 2, sel.height() * 2)
-    step = o._history.shapes[-1]
-    r = step.radius()
-    # кружок придвинут к левому краю: его центр — в r от края, на той же высоте
-    cy = round((175 - sel.top()) * 2)
-    assert img.pixelColor(round(r * 2 - r * 0.8), cy) == QColor("#FF3B30")  # красный кружок, не цифра
-    assert step.pos.x() == 60                            # в истории номер стоит там, куда его поставили
+    reds = sum(1 for x in range(img.width()) for y in range(img.height())
+               if img.pixelColor(x, y) == QColor("#FF3B30"))
+    assert reds > 0                                      # номер внутри рамки нарисован
+    assert o._history.shapes[-1].pos.x() == 60           # за рамкой номер остаётся на месте
     o.close()
 
 

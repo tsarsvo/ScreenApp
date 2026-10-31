@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import dataclasses
 import math
 import sys
 
@@ -351,18 +350,8 @@ class Overlay(QWidget):
                 and not QRectF(self._sel).adjusted(0, 0, 1, 1).contains(shape.pos))
 
     def export_rect(self) -> QRect:
-        """Что войдёт в файл: всегда выделение. Номер, поставленный за рамку, в файл не расширяет
-        снимок — он встаёт на край выделения (см. _on_edge)."""
+        """Что войдёт в файл: всегда выделение. Всё, что за рамкой (номер, стрелка), в файл не попадает."""
         return QRect(self._sel or self.rect())
-
-    @staticmethod
-    def _on_edge(step: StepShape, sel: QRect) -> StepShape:
-        """Копия номера, придвинутая внутрь выделения: кружок касается края, но целиком в файле."""
-        r = step.radius()
-        inner = QRectF(sel).adjusted(r, r, -r, -r)
-        x = min(max(step.pos.x(), inner.left()), inner.right())
-        y = min(max(step.pos.y(), inner.top()), inner.bottom())
-        return dataclasses.replace(step, pos=QPointF(x, y))
 
     def render_selection(self) -> QImage:
         """Вырезает выделенную область в физических пикселях и рисует на ней фигуры."""
@@ -378,10 +367,10 @@ class Overlay(QWidget):
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         p.scale(img.width() / sel.width(), img.height() / sel.height())
         p.translate(-sel.topLeft())
-        for s in self._history.shapes:
+        for s in self._history.shapes:           # как эмодзи: что вышло за рамку, в файл не попадает
             p.save()
             p.setClipRect(QRectF(sel))
-            (self._on_edge(s, sel) if self._outside_step(s) else s).paint(p)
+            s.paint(p)
             p.restore()
         p.end()
         return img
